@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "windows": "C:\\Users\\loicf\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe fingerprint_check.py --hook",
+        "cwd": "./",
+        "timeout": 15
+      }
+    ]
+  }
+}

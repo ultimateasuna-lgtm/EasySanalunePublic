@@ -1,0 +1,21 @@
+# Nouvelles lecons
+
+- Une fonction wrapper Lua qui ne propage pas plusieurs valeurs de retour peut casser silencieusement le parsing protocolaire.
+- Les messages addon doivent echapper `|` dans les libelles texte pour ne pas corrompre le protocole.
+- Reinitialiser `_G.EasySanaluneCore` dans un module charge apres `core/text_utils.lua` efface les helpers deja enregistres; il faut toujours reutiliser la table globale existante.
+- Pour permettre des buffs sur des rands personnalises, il faut conserver la cible brute quand elle ne correspond pas a une stat standard, au lieu de la rabattre vers l'option par defaut.
+- Quand un profil change a chaud, `switch_profile` doit aussi resynchroniser les champs de fiche secondaires (`ECrit`, `Esquive de dos`), sinon l'export/import peut embarquer les mauvaises valeurs visuelles.
+- Pour qu'un export de profil soit fidele entre personnages, il faut serialiser `STATE.CHARS` avec ses `section` + `rand` + `outcomes/outcome_ranges`, ainsi que `profile_buffs[index]` avec les sections et les valeurs par cible, pas seulement la liste plate des rands et la fiche.
+- Pour ajouter un nouveau champ persistant a la modale `Fiche`, il faut synchroniser `core/state.lua`, `core/logic.lua`, `ui/ui.lua`, `locale/frFR.lua` et l'export/import dans `core/mj_logic.lua`.
+- Quand une regle de jeu doit etre partagee entre joueur et mob, il vaut mieux centraliser sa normalisation dans `core/logic.lua` puis brancher les deux UI dessus.
+- Pour un etat joueur visible au survol par les autres, un petit message addon dedie + un ajout dans `GameTooltip:OnTooltipSetUnit` est plus adapte qu'un bloc fixe dans le mainframe.
+- Si l'affichage doit marcher hors groupe, il faut completer la diffusion par une requete/reponse `WHISPER`, sinon le cache remote reste vide.
+- Pour un bloc de survol annexe ancre a un tooltip tiers comme TRP3, il faut aussi ecouter `OnHide`/`OnTooltipCleared` sur ce tooltip et garder un petit garde-fou de fermeture cote frame.
+- Si le tooltip tiers peut apparaitre apres le tooltip Blizzard, il faut prevoir un re-ancrage dynamique pendant le survol et non un seul calcul de position a l'ouverture.
+- Si le rendu "ancre au tooltip" reste peu convaincant en jeu, une position fixe cote ecran peut etre plus lisible et plus robuste qu'un suivi pseudo-contextuel.
+- Pour un survol stable en jeu, ne pas lancer le fade-out directement sur `OnTooltipCleared` ou `OnHide`: il faut garder l'etat tant que `mouseover` vise encore un joueur et demarrer le fade apres un court delai.
+- Pour les dropdowns WoW/StdUi avec libelles longs, `SetWordWrap(false)` est valide et `SetMaxLines(1)` reste la piste a tester si un rendu encore plus strict devient utile.
+- Les automatismes Copilot utiles doivent etre separes entre instruction, skill et hook selon le niveau de garantie souhaite.
+- Pour qu'un skill soit mieux detecte, sa frontmatter doit contenir un `description` explicite avec des mots declencheurs reels.
+- Pour ce depot, une combinaison efficace est: instructions workspace pour la politique globale, hooks pour les rappels, skills pour les workflows ponctuels, docs/memory pour la persistence humaine.
+- Joindre un canal texte public avec le meme identifiant que le prefix addon peut exposer des payloads techniques en clair dans le chat; garder la communication protocolaire sur `SendAddonMessage` uniquement.

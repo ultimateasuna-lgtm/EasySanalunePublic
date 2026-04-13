@@ -1,0 +1,27 @@
+## Interface: 90207
+## Version: 1.0.3
+## Title: EasySanalune
+## Author: Prosper
+## Modifier: Coeurty (some fixes and changes, update StdUi lib), Cylliha (Renamed as EasySanalune, some fixes, adaptated to a RP project)
+## Thanks: BinarySpace (Brikabrok Addon), Kaminaris (StdUi lib), Pleino (moral support)
+## SavedVariablesPerCharacter: EASY_SANALUNE_SAVED_STATE
+
+libs\LibStub\LibStub.lua
+libs\StdUi\StdUi.xml
+locale\frFR.lua
+
+core\state.lua
+core\text_utils.lua
+core\logic.lua
+core\combat_session.lua
+core\addon_protocol.lua
+core\mj_logic.lua
+core\resolution_logic.lua
+ui\ui.lua
+ui\modals.lua
+ui\buffs.lua
+ui\list.lua
+ui\mj.lua
+minimap.xml
+
+bootstrap\main.lua
