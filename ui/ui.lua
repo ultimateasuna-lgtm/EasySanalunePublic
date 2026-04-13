@@ -4189,6 +4189,7 @@ COMBAT_SESSION.syncedMobState = COMBAT_SESSION.syncedMobState or {
 }
 COMBAT_SESSION.actionHistory = COMBAT_SESSION.actionHistory or {}
 COMBAT_SESSION.playerSurvivalStates = COMBAT_SESSION.playerSurvivalStates or {}
+COMBAT_SESSION.playerSurvivalSupport = COMBAT_SESSION.playerSurvivalSupport or {}
 
 UI.knownMJs = COMBAT_SESSION.knownMJs
 UI.rollBuffer = COMBAT_SESSION.rollBuffer
@@ -4198,6 +4199,7 @@ UI.pendingPlayerResolutions = COMBAT_SESSION.pendingPlayerResolutions
 UI.syncedMobState = COMBAT_SESSION.syncedMobState
 UI.actionHistory = COMBAT_SESSION.actionHistory
 UI.playerSurvivalStates = COMBAT_SESSION.playerSurvivalStates
+UI.playerSurvivalSupport = COMBAT_SESSION.playerSurvivalSupport
 UI.playerSurvivalRequestTimes = UI.playerSurvivalRequestTimes or {}
 
 local PLAYER_SURVIVAL_CACHE_TTL = 30
@@ -4219,6 +4221,22 @@ local function normalize_player_name_key(playerName)
     raw = Ambiguate(raw, "short")
   end
   return raw ~= "" and raw or nil
+end
+
+local function mark_player_survival_support(playerName)
+  local cacheKey = normalize_player_name_key(playerName)
+  if not cacheKey then
+    return
+  end
+  UI.playerSurvivalSupport[cacheKey] = true
+end
+
+local function can_request_player_survival(playerName)
+  local cacheKey = normalize_player_name_key(playerName)
+  if not cacheKey then
+    return false
+  end
+  return UI.playerSurvivalSupport[cacheKey] == true
 end
 
 local function cache_player_survival(playerName, source, timestamp)
@@ -4285,6 +4303,10 @@ local function request_player_survival_sync(playerName)
 
   local localPlayerKey = normalize_player_name_key(UnitName("player") or "")
   if localPlayerKey and cacheKey == localPlayerKey then
+    return false
+  end
+
+  if not can_request_player_survival(playerName) then
     return false
   end
 
@@ -5318,12 +5340,15 @@ function UI.OnAddonMessage(prefix, message, channel, sender)
     end
 
   elseif msgType == ((Protocol and Protocol.TYPES and Protocol.TYPES.PLAYER_SURVIVAL_REQUEST) or "PLAYER_SURVIVAL_REQUEST") then
+    mark_player_survival_support(sender)
     if sender and sender ~= "" and UI.SendPlayerSurvivalSync then
       UI.SendPlayerSurvivalSync(sender)
     end
 
   elseif msgType == ((Protocol and Protocol.TYPES and Protocol.TYPES.PLAYER_SURVIVAL_SYNC) or "PLAYER_SURVIVAL_SYNC") then
     local playerName = parsed.playerName or sender
+    mark_player_survival_support(playerName)
+    mark_player_survival_support(sender)
     if playerName and playerName ~= "" then
       cache_player_survival(playerName, {
         hit_points = parsed.hitPoints,
