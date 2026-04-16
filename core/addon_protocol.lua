@@ -5,7 +5,8 @@ local Text = Core.Text or {}
 Core.Protocol = Core.Protocol or {}
 local Protocol = Core.Protocol
 
-Protocol.CHANNEL = "easysanalune"
+Protocol.LEGACY_CHANNEL = "easysanalune"
+Protocol.CHANNEL = "easysanalune2"
 
 Protocol.TYPES = {
   MJ_ANNOUNCE = "MJ_ANNOUNCE",
@@ -36,13 +37,14 @@ local function split_message(message)
   return parts
 end
 
-function Protocol.build_mj_announce(playerName, timestamp, isEnabled)
+function Protocol.build_mj_announce(playerName, timestamp, isEnabled, supportsPlayerSurvival)
   return table.concat({
     Protocol.TYPES.MJ_ANNOUNCE,
     "1",
     tostring(playerName or "Unknown"),
     tostring(timestamp or 0),
     isEnabled == false and "0" or "1",
+    supportsPlayerSurvival == false and "0" or "1",
   }, "|")
 end
 
@@ -184,6 +186,7 @@ function Protocol.parse_message(message)
     parsed.playerName = parts[3]
     parsed.timestamp = tonumber(parts[4])
     parsed.isEnabled = parts[5] ~= "0"
+    parsed.supportsPlayerSurvival = parts[6] == "1"
     return parsed
   end
 

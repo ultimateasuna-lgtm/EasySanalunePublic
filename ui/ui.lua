@@ -2281,9 +2281,6 @@ UI.build_body = function()
     STATE.profile_rda[targetIndex] = STATE.rda
     STATE.profile_rda_crit[targetIndex] = STATE.rda_crit
     _G.EASY_SANALUNE_SAVED_STATE = STATE
-    if UI and UI.SendPlayerSurvivalSync then
-      UI.SendPlayerSurvivalSync()
-    end
   end
 
   local textFieldsModal = nil
@@ -4147,7 +4144,8 @@ INTERNALS.build_rand_pattern = build_rand_pattern
 -- Communication addon (demandes MJ/PJ et messages recus)
 -- -----------------------------------------------------------------------------
 
-local ADDON_CHANNEL = (Protocol and Protocol.CHANNEL) or "easysanalune"
+local ADDON_CHANNEL = (Protocol and Protocol.CHANNEL) or "easysanalune2"
+local LEGACY_ADDON_CHANNEL = (Protocol and Protocol.LEGACY_CHANNEL) or "easysanalune"
 local MJ_EXPIRY = 60
 
 local COMBAT_SESSION = nil
@@ -4911,9 +4909,9 @@ function UI.SendMJAnnounce(isEnabled)
   end
   local msg = nil
   if Protocol and Protocol.build_mj_announce then
-    msg = Protocol.build_mj_announce(playerName, GetTime(), enabledState)
+    msg = Protocol.build_mj_announce(playerName, GetTime(), enabledState, true)
   else
-    msg = "MJ_ANNOUNCE|1|" .. playerName .. "|" .. tostring(GetTime()) .. "|" .. (enabledState and "1" or "0")
+    msg = "MJ_ANNOUNCE|1|" .. playerName .. "|" .. tostring(GetTime()) .. "|" .. (enabledState and "1" or "0") .. "|1"
   end
   C_ChatInfo.SendAddonMessage(ADDON_CHANNEL, msg, channel)
 end
@@ -4927,17 +4925,15 @@ function UI.SendPlayerSurvivalSync(targetPlayer)
   local playerName = UnitName("player") or "Unknown"
   cache_player_survival(playerName, snapshot, GetTime())
 
-  local channel = nil
-  local sendTarget = nil
-  if targetPlayer and tostring(targetPlayer) ~= "" then
-    channel = "WHISPER"
-    sendTarget = tostring(targetPlayer)
-  else
-    channel = get_addon_send_channel()
-    if not channel then
-      return false
-    end
+  local sendTarget = tostring(targetPlayer or "")
+  sendTarget = string.gsub(sendTarget, "^%s+", "")
+  sendTarget = string.gsub(sendTarget, "%s+$", "")
+  -- Pas de broadcast groupe ici : certaines anciennes versions peuvent afficher le payload brut en chat.
+  if sendTarget == "" then
+    return false
   end
+
+  local channel = "WHISPER"
 
   local msg = nil
   if Protocol and Protocol.build_player_survival_sync then
@@ -4968,11 +4964,7 @@ function UI.SendPlayerSurvivalSync(targetPlayer)
     }, "|")
   end
 
-  if channel == "WHISPER" and sendTarget then
-    C_ChatInfo.SendAddonMessage(ADDON_CHANNEL, msg, channel, sendTarget)
-  else
-    C_ChatInfo.SendAddonMessage(ADDON_CHANNEL, msg, channel)
-  end
+  C_ChatInfo.SendAddonMessage(ADDON_CHANNEL, msg, channel, sendTarget)
   return true
 end
 
@@ -5313,7 +5305,7 @@ function UI.SendMJAttackRequest(targetPlayer, attackType, min, max, mobName, att
 end
 
 function UI.OnAddonMessage(prefix, message, channel, sender)
-  if prefix ~= ADDON_CHANNEL or not message then return end
+  if (prefix ~= ADDON_CHANNEL and prefix ~= LEGACY_ADDON_CHANNEL) or not message then return end
 
   local parsed = nil
   if Protocol and Protocol.parse_message then
@@ -5327,6 +5319,10 @@ function UI.OnAddonMessage(prefix, message, channel, sender)
 
   if msgType == ((Protocol and Protocol.TYPES and Protocol.TYPES.MJ_ANNOUNCE) or "MJ_ANNOUNCE") then
     local mjName = parsed.playerName
+    if parsed.supportsPlayerSurvival then
+      mark_player_survival_support(mjName)
+      mark_player_survival_support(sender)
+    end
     if mjName and mjName ~= "" then
       if parsed.isEnabled == false then
         if type(UI.knownMJs) == "table" then

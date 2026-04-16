@@ -93,7 +93,8 @@ StdUi.config = {
 _G.StdUi = StdUi
 
 local addon_id = "EasySanalune"
-local addon_channel = (Protocol and Protocol.CHANNEL) or "easysanalune"
+local addon_channel = (Protocol and Protocol.CHANNEL) or "easysanalune2"
+local legacy_addon_channel = (Protocol and Protocol.LEGACY_CHANNEL) or "easysanalune"
 
 local function get_saved_state()
 	return _G.EASY_SANALUNE_SAVED_STATE
@@ -111,20 +112,17 @@ load_frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 load_frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 load_frame:SetScript("OnEvent", function(_, event, addonPrefix, message, ...)
 	if event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" then
-		if UI and UI.SendMJAnnounce and STATE and STATE.mj_enabled then
-			UI.SendMJAnnounce()
+		if UI and UI.SendMJAnnounce then
+			UI.SendMJAnnounce(STATE and STATE.mj_enabled and true or false)
 		end
-		if UI and UI.SendPlayerSurvivalSync then
-			UI.SendPlayerSurvivalSync()
-		end
-		if UI and UI.MaybeAutoRefreshMJMobSync then
+		if UI and UI.MaybeAutoRefreshMJMobSync and STATE and STATE.mj_enabled then
 			UI.MaybeAutoRefreshMJMobSync(event == "PLAYER_ENTERING_WORLD" and 1 or 0.5)
 		end
 		return
 	end
 
 	if event == "CHAT_MSG_ADDON" then
-		if addonPrefix == addon_channel then
+		if addonPrefix == addon_channel or addonPrefix == legacy_addon_channel then
 			local channelType, senderName = ...
 			if UI and UI.OnAddonMessage then
 				UI.OnAddonMessage(addonPrefix, message, channelType, senderName)
@@ -138,6 +136,9 @@ load_frame:SetScript("OnEvent", function(_, event, addonPrefix, message, ...)
 	end
 
 	C_ChatInfo.RegisterAddonMessagePrefix(addon_channel)
+	if legacy_addon_channel ~= addon_channel then
+		C_ChatInfo.RegisterAddonMessagePrefix(legacy_addon_channel)
+	end
 	L_print("addon_loaded")
 
 	if type(Core.prepare_state) ~= "function" then
