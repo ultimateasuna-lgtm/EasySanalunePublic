@@ -7490,13 +7490,36 @@ function UI.TryResolve(requestId)
   UI.pendingMJRequests[requestId] = nil
 end
 
+-- Aliases utilises pour retrouver le rand defensif du joueur quand son nom local
+-- ne correspond pas exactement a la cle canonique (accents differents, renommage,
+-- variantes courtes "Def mag" / "Def phys"...).
+local PLAYER_DEFENSE_RAND_NAME_ALIASES = {
+  PHY_DEF = { "Défense physique", "Defense physique", "Def phys", "Déf phys", "Def physique", "Déf physique" },
+  MAG_DEF = { "Défense magique", "Defense magique", "Def mag", "Déf mag", "Def magique", "Déf magique" },
+  DODGE = { "Esquive", "Dodge" },
+}
+
 function UI.GetPlayerDefenseRange(defenderRandType)
-  local lookup = get_defense_rand_name(defenderRandType)
-  local _, eMin, eMax = UI.FindDefaultRandByName(lookup)
-  if not eMin or not eMax then
-    return 1, 100
+  local primary = get_defense_rand_name(defenderRandType)
+  local _, eMin, eMax = UI.FindDefaultRandByName(primary)
+  if eMin and eMax then
+    return eMin, eMax
   end
-  return eMin, eMax
+  -- Fallback: tester chaque alias connu pour eviter qu'un MAG_DEF ne tombe sur
+  -- 1-100 par defaut alors que le joueur a bien un rand "Def magique" custom.
+  local aliases = PLAYER_DEFENSE_RAND_NAME_ALIASES[defenderRandType]
+  if type(aliases) == "table" then
+    for i = 1, #aliases do
+      local alias = aliases[i]
+      if alias and alias ~= primary then
+        local _, aMin, aMax = UI.FindDefaultRandByName(alias)
+        if aMin and aMax then
+          return aMin, aMax
+        end
+      end
+    end
+  end
+  return 1, 100
 end
 
 function UI.StartPlayerDefenseResolution(requestId, defenderRandType, defMin, defMax)
@@ -7804,6 +7827,21 @@ mjRollListenerFrame:SetScript("OnEvent", function(_, _, message)
 
   local shortRoller = Ambiguate(tostring(roller), "short")
   local myName = Ambiguate(UnitName("player") or "", "short")
+
+  -- Filet de securite: tout roll du joueur local pendant un combat actif
+  -- marque automatiquement son tour comme joue. Couvre les rands de la fiche
+  -- (offensifs avec prompt, defensifs, support, soutien, MJ-approuves...) sans
+  -- dependre d'un appel explicite dans chaque call site. mark_combat_player_played
+  -- est idempotent: appel multiple = aucun effet de bord.
+  if shortRoller == myName then
+    local combatState = UI.combatState
+    if combatState and combatState.active then
+      mark_combat_player_played(myName, combatState.round, combatState.side)
+      if UI.NotifyCombatModalRefresh then
+        UI.NotifyCombatModalRefresh()
+      end
+    end
+  end
 
   local function pick_oldest_matching_resolution(resolutionMap, matcher)
     local chosenId = nil
@@ -8331,20 +8369,41 @@ end
 -- Outils divers (recherche / export de profil)
 -- -----------------------------------------------------------------------------
 -- Retrouve un rand par defaut a partir de son nom dans CHARS.
+-- Compare en lowercase ET en accent-folded pour tolerer "Defense" vs "Défense"
+-- (cle canonique cote MJ "Défense magique" vs entree CHARS "Defense magique").
 function UI.FindDefaultRandByName(name)
   if not STATE or not STATE.CHARS then return nil end
-  local lowerName = string.lower(tostring(name or ""))
+  local rawName = tostring(name or "")
+  local lowerName = string.lower(rawName)
+  local foldedName = nil
+  if Core and Core.Text and Core.Text.normalize_name then
+    foldedName = Core.Text.normalize_name(rawName)
+  end
+
+  local function name_matches(itemName)
+    local itemLower = string.lower(tostring(itemName or ""))
+    if itemLower == lowerName then
+      return true
+    end
+    if foldedName and Core and Core.Text and Core.Text.normalize_name then
+      if Core.Text.normalize_name(itemName) == foldedName then
+        return true
+      end
+    end
+    return false
+  end
+
   for i = 1, #STATE.CHARS do
     local entry = STATE.CHARS[i]
     if entry and entry.type == "section" and entry.items then
       for j = 1, #entry.items do
         local item = entry.items[j]
-        if item and string.lower(tostring(item.name or "")) == lowerName then
+        if item and name_matches(item.name) then
           local eMin, eMax = parse_command(item.command)
           return item, eMin, eMax
         end
       end
-    elseif entry and string.lower(tostring(entry.name or "")) == lowerName then
+    elseif entry and name_matches(entry.name) then
       local eMin, eMax = parse_command(entry.command)
       return entry, eMin, eMax
     end

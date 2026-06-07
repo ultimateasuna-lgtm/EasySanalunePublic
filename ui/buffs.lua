@@ -247,13 +247,16 @@ local function get_current_rand_target_options()
     end
 
     local normalized = normalize_name(name)
-    if normalized == "" or seen[normalized] then
+    if normalized == "" then
       return
     end
-    seen[normalized] = true
 
     local sectionLabel = sanitize_line(sectionName or "")
     local label = sectionLabel ~= "" and (sectionLabel .. " > " .. name) or name
+    -- Pas de dedup par nom: plusieurs rands homonymes dans des categories
+    -- differentes doivent tous apparaitre dans la liste deroulante. Le buff
+    -- s'applique par nom donc selectionner l'un ou l'autre touchera tous les
+    -- rands de meme nom, mais au moins chaque entree est visible et selectable.
     out[#out + 1] = {
       key = name,
       label = label,
@@ -517,6 +520,118 @@ local function constrain_checkbox_label(checkbox, owner, rightInset)
   end
 end
 
+-- Mesure la largeur en pixels d'un label avec la police GameFontHighlight (le
+-- defaut StdUi pour boutons/checkbox). Utilise un FontString cache reutilisable
+-- pour eviter de creer un widget par appel.
+local _measure_dropdown_fontstring = nil
+local function measure_dropdown_label_width(text)
+  local raw = tostring(text or "")
+  if raw == "" then
+    return 0
+  end
+  if not _measure_dropdown_fontstring then
+    local owner = UIParent
+    _measure_dropdown_fontstring = owner:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    _measure_dropdown_fontstring:Hide()
+  end
+  _measure_dropdown_fontstring:SetText(raw)
+  return _measure_dropdown_fontstring:GetStringWidth() or 0
+end
+
+-- Calcule la taille auto d'un popup de dropdown:
+-- - largeur: la plus large entre le trigger et le plus long label + padding,
+--   bornee a [minPopupWidth, maxPopupWidth].
+-- - hauteur: nb d'options * rowHeight + padding, bornee a [minPopupHeight, maxPopupHeight].
+-- Renvoie aussi rowWidth (largeur utilisable des rangees a l'interieur du scroll).
+local function compute_dropdown_popup_size(options, triggerWidth, rowHeight, opts)
+  opts = opts or {}
+  local minPopupWidth = tonumber(opts.minPopupWidth) or 180
+  local maxPopupWidth = tonumber(opts.maxPopupWidth) or 380
+  local minPopupHeight = tonumber(opts.minPopupHeight) or 60
+  local maxPopupHeight = tonumber(opts.maxPopupHeight) or 320
+  local rowExtraWidth = tonumber(opts.rowExtraWidth) or 40 -- padding pour checkbox/marge
+  local verticalPadding = tonumber(opts.verticalPadding) or 16
+
+  local longest = 0
+  for i = 1, #(options or {}) do
+    local opt = options[i]
+    if opt and opt.label then
+      local w = measure_dropdown_label_width(opt.label)
+      if w > longest then
+        longest = w
+      end
+    end
+  end
+
+  local desiredContentWidth = longest + rowExtraWidth
+  local triggerW = tonumber(triggerWidth) or 0
+  if triggerW > desiredContentWidth then
+    desiredContentWidth = triggerW
+  end
+  if desiredContentWidth < minPopupWidth then
+    desiredContentWidth = minPopupWidth
+  end
+  if desiredContentWidth > maxPopupWidth then
+    desiredContentWidth = maxPopupWidth
+  end
+
+  local count = #(options or {})
+  local desiredHeight = count * rowHeight + verticalPadding
+  if desiredHeight < minPopupHeight then
+    desiredHeight = minPopupHeight
+  end
+  if desiredHeight > maxPopupHeight then
+    desiredHeight = maxPopupHeight
+  end
+
+  -- rowWidth: largeur du contenu interne au scroll (popup width - paddings - scrollbar)
+  local rowWidth = desiredContentWidth - 32
+  if rowWidth < 60 then
+    rowWidth = 60
+  end
+
+  return desiredContentWidth, desiredHeight, rowWidth
+end
+
+-- Cree une "veil" frame qui couvre host et ne dessine que la bordure
+-- (edgeFile) au-dessus de tous ses enfants. Resout le glitch visuel ou les
+-- bordures des boutons du scroll dessinent par-dessus la bordure du dropdown
+-- pendant le scroll (les enfants d'un ScrollFrame sont clippes mais leur
+-- edgeFile dessine quand meme au pixel pres sur le rebord du parent).
+-- La veil est non-cliquable pour ne pas bloquer les rangees en dessous.
+local function add_border_overlay(host)
+  if not host or not host.CreateTexture then
+    return nil
+  end
+  if host._esBorderVeil then
+    return host._esBorderVeil
+  end
+
+  local veil = CreateFrame("Frame", nil, host, "BackdropTemplate")
+  veil:SetAllPoints(host)
+  veil:SetFrameStrata(host:GetFrameStrata())
+  veil:SetFrameLevel((host:GetFrameLevel() or 1) + 30)
+  veil:EnableMouse(false)
+  veil:EnableMouseWheel(false)
+
+  if veil.SetBackdrop then
+    veil:SetBackdrop({
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      edgeSize = 12,
+      insets = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+  end
+  if veil.SetBackdropColor then
+    veil:SetBackdropColor(0, 0, 0, 0)
+  end
+  if veil.SetBackdropBorderColor then
+    veil:SetBackdropBorderColor(1.0, 0.84, 0.30, 0.95)
+  end
+
+  host._esBorderVeil = veil
+  return veil
+end
+
 local function create_stat_dropdown(parent, initialValue, onSelect, optionsProvider)
   local StdUi = get_stdui()
   if not StdUi then
@@ -558,6 +673,11 @@ local function create_stat_dropdown(parent, initialValue, onSelect, optionsProvi
   local content = scroll.scrollChild
   apply_panel_theme(content, true)
 
+  -- Borde le dropdown au-dessus du scroll/contenu pour eviter que les bordures
+  -- des boutons (edgeFile) ne dessinent par-dessus la bordure du dropdown
+  -- pendant le scroll.
+  add_border_overlay(dropdown)
+
   local function get_selected_option()
     local options = get_options()
     local option = find_stat_option(selectedKey, options)
@@ -588,9 +708,17 @@ local function create_stat_dropdown(parent, initialValue, onSelect, optionsProvi
     local selectedOption = get_selected_option()
     local selectedOptionKey = selectedOption and selectedOption.key or nil
 
+    local _, _, rowWidth = compute_dropdown_popup_size(options, trigger:GetWidth(), 22, {
+      minPopupWidth = 180,
+      maxPopupWidth = 420,
+      minPopupHeight = 60,
+      maxPopupHeight = 320,
+      rowExtraWidth = 24,
+    })
+
     for i = 1, #options do
       local option = options[i]
-      local row = StdUi:Button(content, 148, 20, option.label)
+      local row = StdUi:Button(content, rowWidth, 20, option.label)
       apply_button_theme(row, option.key == selectedOptionKey)
       constrain_button_label(row, 6, 6)
       StdUi:GlueLeft(row, content, 2, 0, 0, 0)
@@ -611,6 +739,8 @@ local function create_stat_dropdown(parent, initialValue, onSelect, optionsProvi
         end
       end)
     end
+
+    content:SetHeight(math.max(28, (#options * 22) + 4))
   end
 
   trigger:SetScript("OnClick", function()
@@ -619,10 +749,30 @@ local function create_stat_dropdown(parent, initialValue, onSelect, optionsProvi
       return
     end
 
-    rebuild_dropdown()
+    -- Important: dimensionner le popup et le scrollChild AVANT le rebuild.
+    -- StdUi:ScrollFrame.scrollChild garde sa largeur initiale (168) tant qu'on
+    -- n'appelle pas UpdateSize, donc les rows ancrees LEFT-RIGHT au contenu
+    -- restaient bloquees a la largeur d'origine (la "taille basique" qui
+    -- reapparaissait au scroll quand WoW recalculait la mise en page).
+    local options = get_options()
+    local popupW, popupH = compute_dropdown_popup_size(options, trigger:GetWidth(), 22, {
+      minPopupWidth = 180,
+      maxPopupWidth = 460,
+      minPopupHeight = 60,
+      maxPopupHeight = 480,
+      rowExtraWidth = 24,
+    })
     dropdown:ClearAllPoints()
     dropdown:SetPoint("TOPLEFT", trigger, "BOTTOMLEFT", 0, -2)
-    dropdown:SetSize(trigger:GetWidth(), 116)
+    dropdown:SetSize(popupW, popupH)
+    if scroll and scroll.UpdateSize then
+      scroll:UpdateSize(popupW - 12, popupH - 12)
+    elseif scroll and scroll.SetSize then
+      scroll:SetSize(popupW - 12, popupH - 12)
+    end
+    StdUi:GlueAcross(scroll, dropdown, 6, -6, -6, 6)
+
+    rebuild_dropdown()
     dropdown:Show()
   end)
 
@@ -675,6 +825,9 @@ local function create_multi_target_dropdown(parent, optionsProvider, selectedMap
   if content.SetClipsChildren then
     content:SetClipsChildren(true)
   end
+
+  -- Borde le dropdown au-dessus du scroll/contenu (voir add_border_overlay).
+  add_border_overlay(dropdown)
 
   local function get_selected_keys()
     local out = {}
@@ -765,10 +918,28 @@ local function create_multi_target_dropdown(parent, optionsProvider, selectedMap
       return
     end
 
-    rebuild_dropdown()
+    -- Cf. commentaire dans create_stat_dropdown: dimensionner avant rebuild,
+    -- via scroll:UpdateSize qui resize aussi le scrollChild (sinon les rows
+    -- restent bloquees a la largeur initiale du scroll a la premiere creation).
+    local options = get_options()
+    local popupW, popupH = compute_dropdown_popup_size(options, trigger:GetWidth(), 24, {
+      minPopupWidth = 230,
+      maxPopupWidth = 520,
+      minPopupHeight = 80,
+      maxPopupHeight = 520,
+      rowExtraWidth = 50, -- checkbox + paddings
+    })
     dropdown:ClearAllPoints()
     dropdown:SetPoint("TOPLEFT", trigger, "BOTTOMLEFT", 0, -2)
-    dropdown:SetSize(math.max(trigger:GetWidth(), 230), 144)
+    dropdown:SetSize(popupW, popupH)
+    if scroll and scroll.UpdateSize then
+      scroll:UpdateSize(popupW - 12, popupH - 12)
+    elseif scroll and scroll.SetSize then
+      scroll:SetSize(popupW - 12, popupH - 12)
+    end
+    StdUi:GlueAcross(scroll, dropdown, 6, -6, -6, 6)
+
+    rebuild_dropdown()
     dropdown:Show()
   end)
 
@@ -2365,7 +2536,7 @@ function UI.Buffs.EnsureWindow()
   frame:SetResizable(true)
   frame:SetClampedToScreen(true)
   frame:SetMinResize(BUFF_WINDOW_MIN_W, BUFF_WINDOW_MIN_H)
-  frame:SetMaxResize(480, 620)
+  frame:SetMaxResize(900, 1100)
 
   local title = StdUi:FontString(frame, L_get("buff_window_title"))
   title:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -10)
@@ -2484,6 +2655,11 @@ function UI.Buffs.EnsureWindow()
     STATE.buff_dim_w = newW
     STATE.buff_dim_h = newH
   end)
+
+  -- Borde la fenetre buffs au-dessus du scroll/contenu pour eviter les memes
+  -- glitches que sur les dropdowns (bordures des rangees qui dessinent
+  -- par-dessus la bordure de la fenetre pendant le scroll).
+  add_border_overlay(frame)
 
   UI.BUFFS_FRAME = frame
   UI.BUFFS_SCROLL = scroll
