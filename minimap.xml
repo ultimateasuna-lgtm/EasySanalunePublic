@@ -44,7 +44,7 @@
         </Anchors>
         <Layers>
             <Layer level="ARTWORK">
-                <Texture name="EasySanaluneMinimapButton_Icon" file="Interface\Icons\inv_misc_herb_goldclover">
+                <Texture name="EasySanaluneMinimapButton_Icon" file="Interface\AddOns\EasySanalune\icon">
                     <Size>
                         <AbsDimension x="21" y="21"/>
                     </Size>

@@ -2101,7 +2101,10 @@ end
 UI.build_ui = function()
   UI.MAIN_FRAME = StdUi:PanelWithTitle(UIParent, 200, 50, UnitName("player"), 200, 32)
   UI.MAIN_FRAME.titlePanel.label:SetText(L_get("ui_title"))
-  apply_panel_theme(UI.MAIN_FRAME)
+  -- Cadre du panneau retire completement: on ne garde que le logo + le contenu
+  if UI.MAIN_FRAME.SetBackdrop then
+    UI.MAIN_FRAME:SetBackdrop(nil)
+  end
   if UI.MAIN_FRAME.titlePanel then
     if UI.MAIN_FRAME.titlePanel.SetBackdrop then
       UI.MAIN_FRAME.titlePanel:SetBackdrop(nil)
@@ -2114,6 +2117,41 @@ UI.build_ui = function()
     end
   end
   style_font_string(UI.MAIN_FRAME.titlePanel.label, true)
+
+  -- Logo a la place du texte de titre "EasySanalune", cliquable pour ouvrir/fermer et deplacable
+  if UI.MAIN_FRAME.titlePanel and UI.MAIN_FRAME.titlePanel.label then
+    UI.MAIN_FRAME.titlePanel.label:Hide()
+    if not UI.MAIN_FRAME.logoButton then
+      local logoButton = CreateFrame("Button", nil, UI.MAIN_FRAME)
+      logoButton:SetSize(128, 64)
+      logoButton:SetPoint("CENTER", UI.MAIN_FRAME.titlePanel, "CENTER", 0, 0)
+      logoButton:SetFrameLevel(UI.MAIN_FRAME:GetFrameLevel() + 5)
+      logoButton:SetNormalTexture("Interface\\AddOns\\EasySanalune\\Assets\\EasySanaluneLogo")
+      logoButton:SetHighlightTexture("Interface\\AddOns\\EasySanalune\\Assets\\EasySanaluneLogo", "ADD")
+      logoButton:RegisterForDrag("LeftButton")
+      logoButton:SetScript("OnClick", function()
+        if STATE.shown then
+          UI.HIDE()
+        else
+          UI.EXPAND()
+        end
+      end)
+      logoButton:SetScript("OnDragStart", function()
+        UI.MAIN_FRAME:StartMoving()
+        UI.MAIN_FRAME:SetScript("OnUpdate", function(frame)
+          sync_main_frame_during_drag(frame)
+        end)
+      end)
+      logoButton:SetScript("OnDragStop", function()
+        UI.MAIN_FRAME:StopMovingOrSizing()
+        UI.MAIN_FRAME:SetScript("OnUpdate", nil)
+        apply_main_frame_position()
+        _G.EASY_SANALUNE_SAVED_STATE = STATE
+      end)
+      UI.MAIN_FRAME.logoButton = logoButton
+      UI.MAIN_FRAME.titlePanel.logo = logoButton:GetNormalTexture()
+    end
+  end
 
   UI.MAIN_FRAME.texture = UI.MAIN_FRAME:CreateTexture(nil, "BACKGROUND", nil, -8)
   refresh_main_frame_texture()
@@ -2145,17 +2183,6 @@ UI.build_ui = function()
 
   -- Redimensionnement
   UI.resizeButton = UI.build_resizeButton()
-
-  -- Boutons ouvrir/fermer du contenu
-  UI.BUTTON_EXPAND = StdUi:SquareButton(UI.MAIN_FRAME, 20, 20, 'DOWN')
-  UI.BUTTON_EXPAND:SetPoint("TOPRIGHT")
-  UI.BUTTON_EXPAND:SetScript("OnClick", UI.EXPAND)
-  apply_button_theme(UI.BUTTON_EXPAND)
-
-  UI.BUTTON_HIDE = StdUi:SquareButton(UI.MAIN_FRAME, 20, 20, 'UP')
-  UI.BUTTON_HIDE:SetPoint("TOPRIGHT")
-  UI.BUTTON_HIDE:SetScript("OnClick", UI.HIDE)
-  apply_button_theme(UI.BUTTON_HIDE)
 
   -- Etat d'affichage initial
   if STATE.shown then
@@ -2262,8 +2289,6 @@ UI.HIDE = function()
   if UI.Buffs and UI.Buffs.OnMainHide then
     UI.Buffs.OnMainHide()
   end
-  UI.BUTTON_HIDE:Hide()
-  UI.BUTTON_EXPAND:Show()
   UI.resizeButton:Hide()
   UI.MAIN_FRAME:SetWidth(STATE.dim_hide_w)
   UI.MAIN_FRAME:SetHeight(STATE.dim_hide_h)
@@ -2277,8 +2302,6 @@ end
 
 -- Deplier la fenetre
 UI.EXPAND = function()
-  UI.BUTTON_EXPAND:Hide()
-  UI.BUTTON_HIDE:Show()
   UI.resizeButton:Show()
   release_body()
   local minWidth, minHeight = get_min_frame_size()
@@ -2426,6 +2449,29 @@ UI.build_body = function()
 
   if UI.BODY and UI.BODY.SetBackdropBorderColor then
     UI.BODY:SetBackdropBorderColor(0, 0, 0, 0)
+  end
+
+  -- Le cadre encore visible (corps de la fenetre) sert de zone de drag
+  UI.BODY:EnableMouse(true)
+  UI.BODY:RegisterForDrag("LeftButton")
+  UI.BODY:SetScript("OnDragStart", function()
+    UI.MAIN_FRAME:StartMoving()
+    UI.MAIN_FRAME:SetScript("OnUpdate", function(frame)
+      sync_main_frame_during_drag(frame)
+    end)
+  end)
+  UI.BODY:SetScript("OnDragStop", function()
+    UI.MAIN_FRAME:StopMovingOrSizing()
+    UI.MAIN_FRAME:SetScript("OnUpdate", nil)
+    apply_main_frame_position()
+    _G.EASY_SANALUNE_SAVED_STATE = STATE
+  end)
+
+  -- Le bouton de redimensionnement est ancre dans le cadre encore visible
+  if UI.resizeButton then
+    UI.resizeButton:ClearAllPoints()
+    UI.resizeButton:SetPoint("BOTTOMRIGHT", UI.BODY, "BOTTOMRIGHT", -2, 2)
+    UI.resizeButton:SetFrameLevel((UI.BODY:GetFrameLevel() or 1) + 50)
   end
 
   local bodyBorderOverlay = CreateFrame("Frame", nil, UI.BODY, "BackdropTemplate")
