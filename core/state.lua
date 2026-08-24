@@ -75,6 +75,7 @@
 ---@field profile_crit_off_failure_visual table<integer, number>
 ---@field profile_crit_def_failure_visual table<integer, number>
 ---@field profile_dodge_back_percent table<integer, number>
+---@field profile_movement_speed table<integer, number>
 ---@field profile_hit_points table<integer, number>
 ---@field profile_armor_type table<integer, string>
 ---@field profile_durability_current table<integer, number>
@@ -91,6 +92,7 @@
 ---@field crit_off_failure_visual number
 ---@field crit_def_failure_visual number
 ---@field dodge_back_percent number
+---@field movement_speed number
 ---@field hit_points number
 ---@field armor_type string
 ---@field durability_current number
@@ -132,6 +134,7 @@ StateLib.DEF_STATE = {
   profile_crit_off_failure_visual = { 0 },
   profile_crit_def_failure_visual = { 0 },
   profile_dodge_back_percent = { 50 },
+  profile_movement_speed = { 100 },
   profile_hit_points = { 5 },
   profile_armor_type = { "nue" },
   profile_durability_current = { 5 },
@@ -148,6 +151,7 @@ StateLib.DEF_STATE = {
   crit_off_failure_visual = 0,
   crit_def_failure_visual = 0,
   dodge_back_percent = 50,
+  movement_speed = 100,
   hit_points = 5,
   armor_type = "nue",
   durability_current = 5,

@@ -2633,7 +2633,20 @@ local function CreateMJFrame()
           for i = 1, #statusRows do
             local row = statusRows[i]
             local statusText = row.played and ("|cff00ff00" .. L_get("mj_combat_player_status_played") .. "|r") or ("|cffff9900" .. L_get("mj_combat_player_status_pending") .. "|r")
-            chunks[#chunks + 1] = string.format("%s: %s", get_display_name_for(tostring(row.name or "?")), statusText)
+            local moveText = ""
+            if UI.GetPlayerMovementDisplay then
+              local remaining, _, exceeded, hasData = UI.GetPlayerMovementDisplay(row.name)
+              if hasData then
+                if exceeded then
+                  moveText = "|cffff4040" .. L_get("mj_combat_movement_exceeded") .. "|r"
+                else
+                  local rem = tonumber(remaining) or 0
+                  local color = rem <= 0 and "ffff6060" or (rem <= 50 and "ffffc040" or "ff60ff60")
+                  moveText = string.format("|c%s%s|r", color, string.format(L_get("mj_combat_movement_suffix"), rem))
+                end
+              end
+            end
+            chunks[#chunks + 1] = string.format("%s: %s%s", get_display_name_for(tostring(row.name or "?")), statusText, moveText)
           end
           stateLabel:SetText(base .. string.format(L_get("mj_combat_state_time_suffix"), secondsValue))
           playersLabel:SetText(L_get("mj_combat_players_label") .. "\n" .. (#chunks > 0 and table.concat(chunks, "\n") or L_get("mj_combat_players_none")))

@@ -49,6 +49,7 @@ local INTERNALS = {}
 UI._internals = INTERNALS
 local DEFAULT_CRIT_THRESHOLD = 70
 local DEFAULT_DODGE_BACK_PERCENT = 50
+local DEFAULT_MOVEMENT_SPEED = 100
 local DEFAULT_HIT_POINTS = 5
 local DEFAULT_ARMOR_TYPE = "nue"
 local DEFAULT_DURABILITY_MAX = 5
@@ -227,6 +228,30 @@ local normalize_chars = type(Core.normalize_chars) == "function" and Core.normal
 local deep_clone_chars = type(Core.deep_clone_chars) == "function" and Core.deep_clone_chars or fallback_deep_clone_chars
 local normalize_survival_data = type(Core.normalize_survival_data) == "function" and Core.normalize_survival_data or function(data) return data end
 local get_survival_snapshot = type(Core.get_survival_snapshot) == "function" and Core.get_survival_snapshot or function(data) return data or {} end
+local MovementLogic = type(Core.Movement) == "table" and Core.Movement or {
+  FULL_MOVE_YARDS = 30,
+  EXCEED_GRACE_YARDS = 1,
+  DEFAULT_MOVEMENT_SPEED = 100,
+  clamp_speed = function(value, defaultValue)
+    local n = tonumber(value) or tonumber(defaultValue) or 100
+    n = math.floor(n + 0.5)
+    if n < 0 then n = 0 elseif n > 999 then n = 999 end
+    return n
+  end,
+  compute = function(budgetPercent, movedYards, rolled)
+    local budget = tonumber(budgetPercent) or 100
+    local moved = math.max(0, tonumber(movedYards) or 0)
+    local usedPercent = (moved / 30) * 100
+    local remaining = rolled and 0 or math.max(0, budget - usedPercent)
+    return {
+      remainingPercent = math.floor(remaining + 0.5),
+      usedPercent = math.floor(usedPercent + 0.5),
+      exceeded = moved > ((budget / 100) * 30 + 1),
+      allowedYards = (budget / 100) * 30,
+      budgetPercent = budget,
+    }
+  end,
+}
 local format_durability_text = type(Core.format_durability_text) == "function" and Core.format_durability_text or function(data)
   local snapshot = data or {}
   if snapshot.durability_infinite then
@@ -539,6 +564,7 @@ local INFOS_GUIDE_LINES = {
   "- Le bouton Fiche ouvre le reglage de la fiche personnage.",
   "- Ces seuils influencent les resolutions et lectures de rands.",
   "- Valeurs par defaut: 1-100 standard, puis personnalisation possible.",
+  "- Vitesse de deplacement (%): budget de mouvement par tour de combat (100% par defaut).",
   "- WIP, cette partie est amenee a evoluer pour plus de flexibilite et de types de seuils.",
   "",
   "==============================",
@@ -575,6 +601,10 @@ local INFOS_GUIDE_LINES = {
   "- Suite: alterne le camp; le numero de tour augmente au retour sur le camp de depart.",
   "- Fin du combat: arrete la sequence de tours et annonce la fin.",
   "- Le suivi affiche aussi un compteur en secondes (tour x duree configuree) et l'etat des joueurs (a joue / en attente).",
+  "- Deplacement de combat: pendant un combat, chaque joueur voit un indicateur Deplacement: X% qui baisse quand il avance ou recule.",
+  "- Lancer un rand met le deplacement du joueur a 0% pour le tour; le budget repart a 100% a chaque nouveau tour.",
+  "- Le MJ voit le deplacement restant de chaque joueur dans la liste de la modale Combat.",
+  "- Si un joueur depasse son budget de deplacement, le MJ recoit une alerte (chat + historique de combat).",
   "- Reset historique: vide l'historique combat de cette modale.",
   "- Un message de phase est aussi envoye en /rw (ou /party hors raid).",
   "",
@@ -2948,6 +2978,11 @@ UI.build_body = function()
           label = L_get("ui_label_dodge_back_percent"),
           value = tostring(clamp_percent(STATE.dodge_back_percent, DEFAULT_DODGE_BACK_PERCENT)),
         },
+        {
+          key = "movement_speed",
+          label = L_get("ui_label_movement_speed"),
+          value = tostring(MovementLogic.clamp_speed(STATE.movement_speed, DEFAULT_MOVEMENT_SPEED)),
+        },
       },
       onLiveChange = function(values, applyValue, setFieldEnabled, changedKey)
         if changedKey ~= nil and changedKey ~= "armor_type" then
@@ -3039,6 +3074,8 @@ UI.build_body = function()
           return false
         end
 
+        local movementSpeedApplied = MovementLogic.clamp_speed(values.movement_speed, DEFAULT_MOVEMENT_SPEED)
+
         local hitPointsValue, okHitPoints = parse_hit_points_value(values.hit_points)
         if not okHitPoints then
           L_print("hit_points_invalid", L_get("ui_label_hit_points"))
@@ -3096,6 +3133,7 @@ UI.build_body = function()
         STATE.crit_off_failure_visual = offFailureApplied
         STATE.crit_def_failure_visual = defFailureApplied
         STATE.dodge_back_percent = dodgeBackPercent
+        STATE.movement_speed = movementSpeedApplied
         STATE.display_name = string.match(tostring(values.display_name or ""), "^%s*(.-)%s*$")
         STATE.hit_points = hitPointsApplied
         STATE.armor_type = armorTypeApplied
@@ -3128,12 +3166,16 @@ UI.build_body = function()
         if not STATE.profile_dodge_back_percent then
           STATE.profile_dodge_back_percent = {}
         end
+        if not STATE.profile_movement_speed then
+          STATE.profile_movement_speed = {}
+        end
 
         STATE.profile_crit_off_success[STATE.profile_index] = offApplied
         STATE.profile_crit_def_success[STATE.profile_index] = defApplied
         STATE.profile_crit_off_failure_visual[STATE.profile_index] = offFailureApplied
         STATE.profile_crit_def_failure_visual[STATE.profile_index] = defFailureApplied
         STATE.profile_dodge_back_percent[STATE.profile_index] = dodgeBackPercent
+        STATE.profile_movement_speed[STATE.profile_index] = movementSpeedApplied
         persist_survival_profile_state(STATE.profile_index)
         return true
       end,
@@ -3422,12 +3464,14 @@ UI.build_body = function()
             if not STATE.profile_crit_off_failure_visual then STATE.profile_crit_off_failure_visual = {} end
             if not STATE.profile_crit_def_failure_visual then STATE.profile_crit_def_failure_visual = {} end
             if not STATE.profile_dodge_back_percent then STATE.profile_dodge_back_percent = {} end
+            if not STATE.profile_movement_speed then STATE.profile_movement_speed = {} end
             ensure_profile_survival_tables()
             STATE.profile_crit_off_success[#STATE.profiles] = DEFAULT_CRIT_THRESHOLD
             STATE.profile_crit_def_success[#STATE.profiles] = DEFAULT_CRIT_THRESHOLD
             STATE.profile_crit_off_failure_visual[#STATE.profiles] = 0
             STATE.profile_crit_def_failure_visual[#STATE.profiles] = 0
             STATE.profile_dodge_back_percent[#STATE.profiles] = DEFAULT_DODGE_BACK_PERCENT
+            STATE.profile_movement_speed[#STATE.profiles] = DEFAULT_MOVEMENT_SPEED
             STATE.profile_hit_points[#STATE.profiles] = DEFAULT_HIT_POINTS
             STATE.profile_armor_type[#STATE.profiles] = DEFAULT_ARMOR_TYPE
             STATE.profile_durability_current[#STATE.profiles] = DEFAULT_DURABILITY_MAX
@@ -3462,6 +3506,7 @@ UI.build_body = function()
           if STATE.profile_crit_off_failure_visual then table.remove(STATE.profile_crit_off_failure_visual, STATE.profile_index) end
           if STATE.profile_crit_def_failure_visual then table.remove(STATE.profile_crit_def_failure_visual, STATE.profile_index) end
           if STATE.profile_dodge_back_percent then table.remove(STATE.profile_dodge_back_percent, STATE.profile_index) end
+          if STATE.profile_movement_speed then table.remove(STATE.profile_movement_speed, STATE.profile_index) end
           if STATE.profile_hit_points then table.remove(STATE.profile_hit_points, STATE.profile_index) end
           if STATE.profile_armor_type then table.remove(STATE.profile_armor_type, STATE.profile_index) end
           if STATE.profile_durability_current then table.remove(STATE.profile_durability_current, STATE.profile_index) end
@@ -3577,6 +3622,9 @@ UI.build_body = function()
     if not STATE.profile_dodge_back_percent then
       STATE.profile_dodge_back_percent = {}
     end
+    if not STATE.profile_movement_speed then
+      STATE.profile_movement_speed = {}
+    end
     ensure_profile_survival_tables()
 
     if STATE.profile_crit_off_success[index] == nil then
@@ -3593,6 +3641,9 @@ UI.build_body = function()
     end
     if STATE.profile_dodge_back_percent[index] == nil then
       STATE.profile_dodge_back_percent[index] = DEFAULT_DODGE_BACK_PERCENT
+    end
+    if STATE.profile_movement_speed[index] == nil then
+      STATE.profile_movement_speed[index] = DEFAULT_MOVEMENT_SPEED
     end
     if STATE.profile_hit_points[index] == nil then
       STATE.profile_hit_points[index] = DEFAULT_HIT_POINTS
@@ -3629,6 +3680,7 @@ UI.build_body = function()
     STATE.crit_off_failure_visual = STATE.profile_crit_off_failure_visual[index]
     STATE.crit_def_failure_visual = STATE.profile_crit_def_failure_visual[index]
     STATE.dodge_back_percent = STATE.profile_dodge_back_percent[index]
+    STATE.movement_speed = STATE.profile_movement_speed[index]
     STATE.hit_points = STATE.profile_hit_points[index]
     STATE.armor_type = STATE.profile_armor_type[index]
     STATE.durability_current = STATE.profile_durability_current[index]
@@ -3672,12 +3724,16 @@ UI.build_body = function()
     if not STATE.profile_dodge_back_percent then
       STATE.profile_dodge_back_percent = {}
     end
+    if not STATE.profile_movement_speed then
+      STATE.profile_movement_speed = {}
+    end
     ensure_profile_survival_tables()
     STATE.profile_crit_off_success[STATE.profile_index] = DEFAULT_CRIT_THRESHOLD
     STATE.profile_crit_def_success[STATE.profile_index] = DEFAULT_CRIT_THRESHOLD
     STATE.profile_crit_off_failure_visual[STATE.profile_index] = 0
     STATE.profile_crit_def_failure_visual[STATE.profile_index] = 0
     STATE.profile_dodge_back_percent[STATE.profile_index] = DEFAULT_DODGE_BACK_PERCENT
+    STATE.profile_movement_speed[STATE.profile_index] = DEFAULT_MOVEMENT_SPEED
     STATE.profile_hit_points[STATE.profile_index] = DEFAULT_HIT_POINTS
     STATE.profile_armor_type[STATE.profile_index] = DEFAULT_ARMOR_TYPE
     STATE.profile_durability_current[STATE.profile_index] = DEFAULT_DURABILITY_MAX
@@ -3690,6 +3746,7 @@ UI.build_body = function()
     STATE.crit_off_failure_visual = 0
     STATE.crit_def_failure_visual = 0
     STATE.dodge_back_percent = DEFAULT_DODGE_BACK_PERCENT
+    STATE.movement_speed = DEFAULT_MOVEMENT_SPEED
     STATE.hit_points = DEFAULT_HIT_POINTS
     STATE.armor_type = DEFAULT_ARMOR_TYPE
     STATE.durability_current = DEFAULT_DURABILITY_MAX
@@ -5758,6 +5815,325 @@ local function get_addon_send_channel()
   return nil
 end
 
+-- -----------------------------------------------------------------------------
+-- Deplacement de combat: budget de mouvement par tour, visible joueur + MJ.
+-- Le suivi ne tourne que pendant un combat MJ actif. La distance parcourue
+-- (avance ET recul = longueur du chemin) est integree via GetUnitSpeed.
+-- Lancer un rand met le deplacement affiche a 0%. Depasser le budget alerte le MJ.
+-- Bloc `do ... end` volontaire: garde les locaux hors du chunk principal (limite 200).
+-- -----------------------------------------------------------------------------
+UI.playerMovementStates = UI.playerMovementStates or {}
+do
+  local MOVEMENT_UPDATE_INTERVAL = 0.1
+  local MOVEMENT_BROADCAST_MIN_INTERVAL = 0.35
+  local MOVEMENT_BROADCAST_MIN_DELTA = 2
+
+  local movementRuntime = {
+    tracking = false,
+    budgetPercent = DEFAULT_MOVEMENT_SPEED,
+    movedYards = 0,
+    rolled = false,
+    alerted = false,
+    accum = 0,
+    lastBroadcastPercent = nil,
+    lastBroadcastRolled = nil,
+    lastBroadcastAt = 0,
+  }
+  UI.movementState = movementRuntime
+
+  local movementTrackerFrame = nil
+  local movementIndicatorFrame = nil
+
+  local function get_local_movement_budget()
+    return MovementLogic.clamp_speed(STATE and STATE.movement_speed, DEFAULT_MOVEMENT_SPEED)
+  end
+
+  local function movement_color_for_percent(percent, exceeded)
+    if exceeded then
+      return 0.95, 0.25, 0.25
+    end
+    local p = tonumber(percent) or 0
+    if p <= 0 then
+      return 0.95, 0.35, 0.35
+    elseif p <= 50 then
+      return 0.98, 0.72, 0.25
+    end
+    return 0.45, 0.85, 0.45
+  end
+
+  local function ensure_movement_indicator()
+    if movementIndicatorFrame then
+      return movementIndicatorFrame
+    end
+    local frame = CreateFrame("Frame", "EasySanaluneMovementIndicator", UIParent, "BackdropTemplate")
+    frame:SetSize(200, 34)
+    frame:SetFrameStrata("HIGH")
+    frame:SetClampedToScreen(true)
+    frame:EnableMouse(true)
+    if StdUi and StdUi.ApplyBackdrop then
+      StdUi:ApplyBackdrop(frame, 'panel')
+    end
+    if apply_panel_theme then
+      apply_panel_theme(frame, false, true)
+    end
+    if frame.SetBackdropColor then frame:SetBackdropColor(0.05, 0.08, 0.14, 0.92) end
+    if frame.SetBackdropBorderColor then frame:SetBackdropBorderColor(0.20, 0.34, 0.55, 0.95) end
+
+    frame.text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    frame.text:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    frame.text:SetText("")
+
+    if INTERNALS.make_modal_draggable then
+      INTERNALS.make_modal_draggable(frame, "movement_indicator")
+    end
+    local savedPos = STATE and STATE.modal_positions and STATE.modal_positions["movement_indicator"]
+    if savedPos and INTERNALS.apply_modal_position then
+      INTERNALS.apply_modal_position(frame, "movement_indicator")
+    else
+      frame:ClearAllPoints()
+      frame:SetPoint("TOP", UIParent, "TOP", 0, -210)
+    end
+
+    frame:Hide()
+    movementIndicatorFrame = frame
+    return frame
+  end
+
+  local function update_movement_indicator(remainingPercent, rolled, exceeded)
+    local frame = ensure_movement_indicator()
+    local text
+    if exceeded then
+      text = L_get("movement_indicator_exceeded")
+    elseif rolled then
+      text = L_get("movement_indicator_rolled")
+    else
+      text = string.format(L_get("movement_indicator_text"), tonumber(remainingPercent) or 0)
+    end
+    frame.text:SetText(text)
+    local r, g, b = movement_color_for_percent(remainingPercent, exceeded)
+    frame.text:SetTextColor(r, g, b)
+  end
+
+  local function broadcast_movement(force)
+    if not movementRuntime.tracking then
+      return
+    end
+    local state = ensure_combat_state()
+    local result = MovementLogic.compute(movementRuntime.budgetPercent, movementRuntime.movedYards, movementRuntime.rolled)
+    local now = GetTime()
+
+    local changed = force
+      or movementRuntime.lastBroadcastPercent == nil
+      or math.abs((movementRuntime.lastBroadcastPercent or 0) - result.remainingPercent) >= MOVEMENT_BROADCAST_MIN_DELTA
+      or movementRuntime.lastBroadcastRolled ~= movementRuntime.rolled
+    if not changed then
+      return
+    end
+    if not force and (now - (movementRuntime.lastBroadcastAt or 0)) < MOVEMENT_BROADCAST_MIN_INTERVAL then
+      return
+    end
+
+    movementRuntime.lastBroadcastPercent = result.remainingPercent
+    movementRuntime.lastBroadcastRolled = movementRuntime.rolled
+    movementRuntime.lastBroadcastAt = now
+
+    local channel = get_addon_send_channel()
+    if not channel or not C_ChatInfo or not C_ChatInfo.SendAddonMessage then
+      return
+    end
+    local playerName = UnitName("player") or "Player"
+    if Protocol and Protocol.build_mj_player_movement then
+      local msg = Protocol.build_mj_player_movement(
+        playerName,
+        state.round,
+        state.side,
+        result.remainingPercent,
+        movementRuntime.budgetPercent,
+        movementRuntime.rolled,
+        result.exceeded,
+        now
+      )
+      C_ChatInfo.SendAddonMessage(ADDON_CHANNEL, msg, channel)
+    end
+  end
+
+  local function send_movement_alert(result)
+    local state = ensure_combat_state()
+    local channel = get_addon_send_channel()
+    if not channel or not C_ChatInfo or not C_ChatInfo.SendAddonMessage then
+      return
+    end
+    local playerName = UnitName("player") or "Player"
+    if Protocol and Protocol.build_mj_player_movement_alert then
+      local msg = Protocol.build_mj_player_movement_alert(
+        playerName,
+        state.round,
+        state.side,
+        result.usedPercent,
+        movementRuntime.budgetPercent,
+        GetTime()
+      )
+      C_ChatInfo.SendAddonMessage(ADDON_CHANNEL, msg, channel)
+    end
+  end
+
+  local function movement_on_update(_, elapsed)
+    if not movementRuntime.tracking then
+      return
+    end
+    -- Devenu MJ pendant le combat: on coupe le suivi et l'indicateur immediatement.
+    if STATE and STATE.mj_enabled then
+      movementRuntime.tracking = false
+      if movementIndicatorFrame then movementIndicatorFrame:Hide() end
+      if movementTrackerFrame then movementTrackerFrame:Hide() end
+      return
+    end
+    local state = UI.combatState
+    if not (state and state.active) then
+      return
+    end
+
+    local speed = 0
+    if type(GetUnitSpeed) == "function" then
+      speed = tonumber((GetUnitSpeed("player"))) or 0
+    end
+    if speed > 0 then
+      movementRuntime.movedYards = movementRuntime.movedYards + speed * (tonumber(elapsed) or 0)
+    end
+
+    movementRuntime.accum = (movementRuntime.accum or 0) + (tonumber(elapsed) or 0)
+    if movementRuntime.accum < MOVEMENT_UPDATE_INTERVAL then
+      return
+    end
+    movementRuntime.accum = 0
+
+    local result = MovementLogic.compute(movementRuntime.budgetPercent, movementRuntime.movedYards, movementRuntime.rolled)
+    update_movement_indicator(result.remainingPercent, movementRuntime.rolled, result.exceeded)
+
+    if result.exceeded and not movementRuntime.alerted then
+      movementRuntime.alerted = true
+      send_movement_alert(result)
+      broadcast_movement(true)
+    else
+      broadcast_movement(false)
+    end
+  end
+
+  local function ensure_movement_tracker()
+    if movementTrackerFrame then
+      return movementTrackerFrame
+    end
+    local f = CreateFrame("Frame", "EasySanaluneMovementTracker", UIParent)
+    f:Hide()
+    f:SetScript("OnUpdate", movement_on_update)
+    movementTrackerFrame = f
+    return f
+  end
+
+  local function reset_movement_counters()
+    movementRuntime.budgetPercent = get_local_movement_budget()
+    movementRuntime.movedYards = 0
+    movementRuntime.rolled = false
+    movementRuntime.alerted = false
+    movementRuntime.accum = 0
+    movementRuntime.lastBroadcastPercent = nil
+    movementRuntime.lastBroadcastRolled = nil
+    movementRuntime.lastBroadcastAt = 0
+  end
+
+  local function start_movement_tracking()
+    movementRuntime.tracking = true
+    reset_movement_counters()
+    local frame = ensure_movement_indicator()
+    update_movement_indicator(movementRuntime.budgetPercent, false, false)
+    frame:Show()
+    ensure_movement_tracker():Show()
+    broadcast_movement(true)
+  end
+
+  local function reset_movement_for_new_turn()
+    reset_movement_counters()
+    if movementRuntime.tracking then
+      update_movement_indicator(movementRuntime.budgetPercent, false, false)
+      broadcast_movement(true)
+    end
+  end
+
+  local function stop_movement_tracking()
+    movementRuntime.tracking = false
+    if movementTrackerFrame then
+      movementTrackerFrame:Hide()
+    end
+    if movementIndicatorFrame then
+      movementIndicatorFrame:Hide()
+    end
+  end
+
+  -- Des que le joueur lance son rand pendant le combat, son deplacement passe a 0%.
+  local function mark_movement_rolled()
+    if not movementRuntime.tracking or movementRuntime.rolled then
+      return
+    end
+    movementRuntime.rolled = true
+    local result = MovementLogic.compute(movementRuntime.budgetPercent, movementRuntime.movedYards, true)
+    update_movement_indicator(0, true, result.exceeded)
+    broadcast_movement(true)
+  end
+
+  -- Synchronise le suivi local avec la banniere de combat (start / next / stop).
+  local function handle_movement_combat_banner(action)
+    local normalized = tostring(action or "next")
+    -- Le MJ n'a pas de budget de deplacement: aucun suivi ni indicateur pour lui.
+    if STATE and STATE.mj_enabled then
+      stop_movement_tracking()
+      return
+    end
+    if normalized == "stop" then
+      stop_movement_tracking()
+    elseif normalized == "start" then
+      start_movement_tracking()
+    elseif movementRuntime.tracking then
+      reset_movement_for_new_turn()
+    else
+      start_movement_tracking()
+    end
+  end
+
+  UI.MarkMovementRolled = mark_movement_rolled
+  UI.HandleMovementCombatBanner = handle_movement_combat_banner
+
+  -- Etat de deplacement affichable cote MJ (self = live, distant = cache reseau).
+  -- Retourne: remainingPercent, rolled, exceeded, hasData.
+  function UI.GetPlayerMovementDisplay(playerName)
+    local myRaw = UnitName("player") or ""
+    local myShort = (type(Ambiguate) == "function") and Ambiguate(myRaw, "short") or myRaw
+    local targetShort = (type(Ambiguate) == "function") and Ambiguate(tostring(playerName or ""), "short") or tostring(playerName or "")
+    if myShort ~= "" and targetShort == myShort then
+      if movementRuntime.tracking then
+        local result = MovementLogic.compute(movementRuntime.budgetPercent, movementRuntime.movedYards, movementRuntime.rolled)
+        return result.remainingPercent, movementRuntime.rolled, result.exceeded, true
+      end
+      return nil, false, false, false
+    end
+    -- Un joueur qui est MJ n'a pas de deplacement a afficher, meme si un cache subsiste.
+    if type(UI.knownMJs) == "table" and type(Ambiguate) == "function" then
+      if targetShort ~= "" then
+        for mjName in pairs(UI.knownMJs) do
+          if Ambiguate(tostring(mjName or ""), "short") == targetShort then
+            return nil, false, false, false
+          end
+        end
+      end
+    end
+    local key = normalize_player_name_key(playerName)
+    local cached = key and UI.playerMovementStates and UI.playerMovementStates[key]
+    if not cached then
+      return nil, false, false, false
+    end
+    return tonumber(cached.remainingPercent) or 0, cached.rolled and true or false, cached.exceeded and true or false, true
+  end
+end
+
 local COMBAT_START_SOUND = "Interface\\AddOns\\EasySanalune\\Sounds\\hob_battlestart.mp3"
 local lastSentCombatBannerTs = nil
 local lastCombatAnnounceText = nil
@@ -5866,6 +6242,10 @@ local function apply_combat_banner_update(action, senderName, roundNumber, side,
 
   show_combat_banner(normalizedAction, state.round, state.side, state.turnDuration)
   UI.NotifyCombatModalRefresh()
+
+  if UI.HandleMovementCombatBanner then
+    UI.HandleMovementCombatBanner(normalizedAction)
+  end
 
   if playStartSound and normalizedAction == "start" then
     play_combat_start_sound()
@@ -6900,6 +7280,46 @@ function UI.OnAddonMessage(prefix, message, channel, sender)
     mark_combat_player_played(parsed.playerName or sender, parsed.round, parsed.side)
     UI.NotifyCombatModalRefresh()
 
+  elseif msgType == ((Protocol and Protocol.TYPES and Protocol.TYPES.MJ_PLAYER_MOVEMENT) or "MJ_PLAYER_MOVEMENT") then
+    local playerName = parsed.playerName or sender
+    local key = normalize_player_name_key(playerName)
+    if key then
+      UI.playerMovementStates = UI.playerMovementStates or {}
+      UI.playerMovementStates[key] = {
+        player_name = tostring(playerName or key),
+        remainingPercent = tonumber(parsed.remainingPercent) or 0,
+        budgetPercent = tonumber(parsed.budgetPercent) or 100,
+        rolled = parsed.rolled and true or false,
+        exceeded = parsed.exceeded and true or false,
+        round = tonumber(parsed.round) or 0,
+        side = tostring(parsed.side or "enemy"),
+        timestamp = tonumber(parsed.timestamp) or GetTime(),
+      }
+      UI.NotifyCombatModalRefresh()
+    end
+
+  elseif msgType == ((Protocol and Protocol.TYPES and Protocol.TYPES.MJ_PLAYER_MOVEMENT_ALERT) or "MJ_PLAYER_MOVEMENT_ALERT") then
+    if not STATE or not STATE.mj_enabled then
+      return
+    end
+    local playerName = tostring(parsed.playerName or sender or "Joueur")
+    local displayName = (INTERNALS.get_display_name_for and INTERNALS.get_display_name_for(playerName)) or playerName
+    local sideLabel = get_combat_side_label(parsed.side)
+    local alertText = string.format(
+      L_get("mj_movement_alert"),
+      displayName,
+      tonumber(parsed.movedPercent) or 0,
+      tonumber(parsed.budgetPercent) or 100,
+      tonumber(parsed.round) or 0,
+      sideLabel
+    )
+    print_resolution_for_local_context(alertText)
+    push_combat_history_event("movement_alert", alertText, {
+      actor = playerName,
+      round = parsed.round,
+      side = parsed.side,
+    })
+
   elseif msgType == ((Protocol and Protocol.TYPES and Protocol.TYPES.MJ_RAND_TURN_ALERT) or "MJ_RAND_TURN_ALERT") then
     if not STATE or not STATE.mj_enabled then
       return
@@ -7883,6 +8303,9 @@ mjRollListenerFrame:SetScript("OnEvent", function(_, _, message)
     local combatState = UI.combatState
     if combatState and combatState.active then
       mark_combat_player_played(myName, combatState.round, combatState.side)
+      if UI.MarkMovementRolled then
+        UI.MarkMovementRolled()
+      end
       if UI.NotifyCombatModalRefresh then
         UI.NotifyCombatModalRefresh()
       end
@@ -8707,6 +9130,9 @@ function UI.ImportProfileFromSerializedText(text)
   if type(STATE.profile_dodge_back_percent) ~= "table" then
     STATE.profile_dodge_back_percent = {}
   end
+  if type(STATE.profile_movement_speed) ~= "table" then
+    STATE.profile_movement_speed = {}
+  end
   if type(STATE.profile_hit_points) ~= "table" then
     STATE.profile_hit_points = {}
   end
@@ -8739,6 +9165,7 @@ function UI.ImportProfileFromSerializedText(text)
   STATE.profile_crit_off_failure_visual[newIndex] = tonumber(parsed.critOffFailureVisual) or 0
   STATE.profile_crit_def_failure_visual[newIndex] = tonumber(parsed.critDefFailureVisual) or 0
   STATE.profile_dodge_back_percent[newIndex] = clamp_percent(parsed.dodgeBackPercent, DEFAULT_DODGE_BACK_PERCENT)
+  STATE.profile_movement_speed[newIndex] = MovementLogic.clamp_speed(parsed.movementSpeed, DEFAULT_MOVEMENT_SPEED)
   STATE.profile_hit_points[newIndex] = tonumber(parsed.hitPoints) or DEFAULT_HIT_POINTS
   STATE.profile_armor_type[newIndex] = normalize_armor_type(parsed.armorType)
   STATE.profile_durability_current[newIndex] = tonumber(parsed.durabilityCurrent) or DEFAULT_DURABILITY_MAX
@@ -8759,6 +9186,7 @@ function UI.ImportProfileFromSerializedText(text)
     STATE.crit_off_failure_visual = STATE.profile_crit_off_failure_visual[newIndex]
     STATE.crit_def_failure_visual = STATE.profile_crit_def_failure_visual[newIndex]
     STATE.dodge_back_percent = STATE.profile_dodge_back_percent[newIndex]
+    STATE.movement_speed = STATE.profile_movement_speed[newIndex]
     STATE.hit_points = STATE.profile_hit_points[newIndex]
     STATE.armor_type = STATE.profile_armor_type[newIndex]
     STATE.durability_current = STATE.profile_durability_current[newIndex]

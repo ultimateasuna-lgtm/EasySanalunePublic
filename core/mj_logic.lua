@@ -93,6 +93,7 @@ function MJ.deserialize_profile(text)
     critOffFailureVisual = 0,
     critDefFailureVisual = 0,
     dodgeBackPercent = 50,
+    movementSpeed = 100,
     hitPoints = 5,
     armorType = "nue",
     durabilityCurrent = 5,
@@ -158,6 +159,8 @@ function MJ.deserialize_profile(text)
       result.critDefFailureVisual = tonumber(rest) or 0
     elseif prefix == "DODGE_BACK" then
       result.dodgeBackPercent = tonumber(rest) or 50
+    elseif prefix == "MOVEMENT_SPEED" then
+      result.movementSpeed = tonumber(rest) or 100
     elseif prefix == "HIT_POINTS" then
       result.hitPoints = tonumber(rest) or 5
     elseif prefix == "ARMOR_TYPE" then
@@ -367,6 +370,7 @@ function MJ.serialize_profile(state)
     "CRIT_OFF_FAIL:" .. tostring(state.crit_off_failure_visual or 0),
     "CRIT_DEF_FAIL:" .. tostring(state.crit_def_failure_visual or 0),
     "DODGE_BACK:" .. tostring(state.dodge_back_percent or 50),
+    "MOVEMENT_SPEED:" .. tostring(state.movement_speed or 100),
     "HIT_POINTS:" .. tostring(state.hit_points or 5),
     "ARMOR_TYPE:" .. encode_export_field(state.armor_type or "nue"),
     "DURABILITY_CURRENT:" .. tostring(state.durability_current or 5),

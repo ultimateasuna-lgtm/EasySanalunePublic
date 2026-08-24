@@ -19,6 +19,8 @@ Protocol.TYPES = {
   MJ_COMBAT_BANNER = "MJ_COMBAT_BANNER",
   MJ_COMBAT_PLAYERS_SYNC = "MJ_COMBAT_PLAYERS_SYNC",
   MJ_PLAYER_TURN_PLAYED = "MJ_PLAYER_TURN_PLAYED",
+  MJ_PLAYER_MOVEMENT = "MJ_PLAYER_MOVEMENT",
+  MJ_PLAYER_MOVEMENT_ALERT = "MJ_PLAYER_MOVEMENT_ALERT",
   MJ_RAND_TURN_ALERT = "MJ_RAND_TURN_ALERT",
   MJ_RAND_TURN_DECISION = "MJ_RAND_TURN_DECISION",
   MJ_MOB_SYNC_RESET = "MJ_MOB_SYNC_RESET",
@@ -214,6 +216,34 @@ function Protocol.build_mj_player_turn_played(playerName, roundNumber, side, tim
     tostring(playerName or "Unknown"),
     tostring(tonumber(roundNumber) or 1),
     sanitize_pipe(side),
+    tostring(timestamp or 0),
+  }, "|")
+end
+
+function Protocol.build_mj_player_movement(playerName, roundNumber, side, remainingPercent, budgetPercent, rolled, exceeded, timestamp)
+  return table.concat({
+    Protocol.TYPES.MJ_PLAYER_MOVEMENT,
+    "1",
+    tostring(playerName or "Unknown"),
+    tostring(tonumber(roundNumber) or 1),
+    sanitize_pipe(side),
+    tostring(math.floor(tonumber(remainingPercent) or 0)),
+    tostring(math.floor(tonumber(budgetPercent) or 100)),
+    rolled and "1" or "0",
+    exceeded and "1" or "0",
+    tostring(timestamp or 0),
+  }, "|")
+end
+
+function Protocol.build_mj_player_movement_alert(playerName, roundNumber, side, movedPercent, budgetPercent, timestamp)
+  return table.concat({
+    Protocol.TYPES.MJ_PLAYER_MOVEMENT_ALERT,
+    "1",
+    tostring(playerName or "Unknown"),
+    tostring(tonumber(roundNumber) or 1),
+    sanitize_pipe(side),
+    tostring(math.floor(tonumber(movedPercent) or 0)),
+    tostring(math.floor(tonumber(budgetPercent) or 100)),
     tostring(timestamp or 0),
   }, "|")
 end
@@ -438,6 +468,30 @@ function Protocol.parse_message(message)
     parsed.round = tonumber(parts[4])
     parsed.side = parts[5]
     parsed.timestamp = tonumber(parts[6])
+    return parsed
+  end
+
+  if msgType == Protocol.TYPES.MJ_PLAYER_MOVEMENT then
+    parsed.version = parts[2]
+    parsed.playerName = parts[3]
+    parsed.round = tonumber(parts[4])
+    parsed.side = parts[5]
+    parsed.remainingPercent = tonumber(parts[6]) or 0
+    parsed.budgetPercent = tonumber(parts[7]) or 100
+    parsed.rolled = parts[8] == "1"
+    parsed.exceeded = parts[9] == "1"
+    parsed.timestamp = tonumber(parts[10])
+    return parsed
+  end
+
+  if msgType == Protocol.TYPES.MJ_PLAYER_MOVEMENT_ALERT then
+    parsed.version = parts[2]
+    parsed.playerName = parts[3]
+    parsed.round = tonumber(parts[4])
+    parsed.side = parts[5]
+    parsed.movedPercent = tonumber(parts[6]) or 0
+    parsed.budgetPercent = tonumber(parts[7]) or 100
+    parsed.timestamp = tonumber(parts[8])
     return parsed
   end
 
