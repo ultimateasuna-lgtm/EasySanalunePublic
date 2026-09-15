@@ -211,12 +211,16 @@ function MJ.deserialize_profile(text)
           rand_role = trim(fields[4] or ""),
           is_default = tostring(fields[5] or "0") == "1",
           icon = trim(fields[6] or ""),
+          follow = trim(fields[7] or ""),
         }
         if currentCharEntry.rand_role == "" then
           currentCharEntry.rand_role = nil
         end
         if currentCharEntry.icon == "" then
           currentCharEntry.icon = nil
+        end
+        if currentCharEntry.follow == "" then
+          currentCharEntry.follow = nil
         end
         ensure_char_section().items[#ensure_char_section().items + 1] = currentCharEntry
       else
@@ -226,21 +230,28 @@ function MJ.deserialize_profile(text)
       local fields = split_export_fields(rest)
       local rollValue = tonumber(fields[1])
       local outcomeText = tostring(fields[2] or "")
+      local followName = trim(fields[3] or "")
       if currentCharEntry and rollValue and outcomeText ~= "" then
         currentCharEntry.outcomes = currentCharEntry.outcomes or {}
         currentCharEntry.outcomes[rollValue] = outcomeText
+        if followName ~= "" then
+          currentCharEntry.outcome_follow = currentCharEntry.outcome_follow or {}
+          currentCharEntry.outcome_follow[rollValue] = followName
+        end
       end
     elseif prefix == "CHAR_RANGE" then
       local fields = split_export_fields(rest)
       local minValue = tonumber(fields[1])
       local maxValue = tonumber(fields[2])
       local rangeText = tostring(fields[3] or "")
+      local followName = trim(fields[4] or "")
       if currentCharEntry and minValue and maxValue and rangeText ~= "" then
         currentCharEntry.outcome_ranges = currentCharEntry.outcome_ranges or {}
         currentCharEntry.outcome_ranges[#currentCharEntry.outcome_ranges + 1] = {
           min = minValue,
           max = maxValue,
           text = rangeText,
+          follow = followName ~= "" and followName or nil,
         }
       end
     elseif prefix == "BUFF_SECTION" then
@@ -410,6 +421,7 @@ function MJ.serialize_profile(state)
       randRole,
       entry.is_default and "1" or "0",
       icon,
+      encode_export_field(entry.follow),
     }, ":")
     lines[#lines + 1] = "RAND:" .. name .. ":" .. command
 
@@ -426,10 +438,15 @@ function MJ.serialize_profile(state)
         local key = keys[idx]
         local text = tostring(entry.outcomes[key] or "")
         if text ~= "" then
+          local followName = ""
+          if type(entry.outcome_follow) == "table" then
+            followName = tostring(entry.outcome_follow[key] or "")
+          end
           lines[#lines + 1] = table.concat({
             "CHAR_OUTCOME",
             tostring(key),
             encode_export_field(text),
+            encode_export_field(followName),
           }, ":")
         end
       end
@@ -448,6 +465,7 @@ function MJ.serialize_profile(state)
               tostring(minValue),
               tostring(maxValue),
               encode_export_field(text),
+              encode_export_field(tostring(range.follow or "")),
             }, ":")
           end
         end

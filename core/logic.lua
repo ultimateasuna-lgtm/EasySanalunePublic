@@ -85,6 +85,25 @@ function Core.copy_outcomes(outcomes)
   return copied
 end
 
+function Core.copy_outcome_follow(follow)
+  local copied = {}
+  if type(follow) ~= "table" then
+    return copied
+  end
+
+  for k, v in pairs(follow) do
+    local idx = tonumber(k)
+    if is_non_negative_integer(idx) then
+      local name = sanitize_single_line(v)
+      if name ~= "" then
+        copied[idx] = name
+      end
+    end
+  end
+
+  return copied
+end
+
 function Core.copy_outcome_ranges(ranges)
   local copied = {}
   if type(ranges) ~= "table" then
@@ -101,7 +120,12 @@ function Core.copy_outcome_ranges(ranges)
         if minVal > maxVal then
           minVal, maxVal = maxVal, minVal
         end
-        table.insert(copied, { min = minVal, max = maxVal, text = text })
+        local rangeEntry = { min = minVal, max = maxVal, text = text }
+        local followName = sanitize_single_line(entry.follow)
+        if followName ~= "" then
+          rangeEntry.follow = followName
+        end
+        table.insert(copied, rangeEntry)
       end
     end
   end
@@ -205,6 +229,9 @@ local function normalize_entry(entry)
     end
     entry.outcomes = Core.copy_outcomes(entry.outcomes)
     entry.outcome_ranges = Core.copy_outcome_ranges(entry.outcome_ranges)
+    entry.outcome_follow = Core.copy_outcome_follow(entry.outcome_follow)
+    local followName = sanitize_single_line(entry.follow)
+    entry.follow = followName ~= "" and followName or nil
   end
 end
 

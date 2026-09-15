@@ -60,6 +60,7 @@ local function parse_command(v)
 end
 local function copy_outcomes(v)                   return INTERNALS.copy_outcomes    and INTERNALS.copy_outcomes(v)    or {}      end
 local function copy_outcome_ranges(v)             return INTERNALS.copy_outcome_ranges and INTERNALS.copy_outcome_ranges(v) or {} end
+local function copy_outcome_follow(v)             return INTERNALS.copy_outcome_follow and INTERNALS.copy_outcome_follow(v) or {} end
 local function toggle_widgets(w, vis)    if INTERNALS.toggle_widgets    then INTERNALS.toggle_widgets(w, vis)       end end
 local function apply_panel_theme(w, s, n) if INTERNALS.apply_panel_theme then INTERNALS.apply_panel_theme(w, s, n) end end
 local function apply_button_theme(w, p)  if INTERNALS.apply_button_theme then INTERNALS.apply_button_theme(w, p)   end end
@@ -375,6 +376,9 @@ UI.make_scroll_elem = function(parent, charlink)
       max = max,
       outcomes = copy_outcomes(obj.infos.outcomes),
       outcomeRanges = copy_outcome_ranges(obj.infos.outcome_ranges),
+      outcomeFollow = copy_outcome_follow(obj.infos.outcome_follow),
+      randFollow = obj.infos.follow,
+      isSupport = infer_rand_role_from_entry(obj.infos) == "support",
     }
 
     if not canSendToMJ then
@@ -422,6 +426,9 @@ UI.make_scroll_elem = function(parent, charlink)
         max = max,
         outcomes = copy_outcomes(obj.infos.outcomes),
         outcomeRanges = copy_outcome_ranges(obj.infos.outcome_ranges),
+        outcomeFollow = copy_outcome_follow(obj.infos.outcome_follow),
+        randFollow = obj.infos.follow,
+        isSupport = infer_rand_role_from_entry(obj.infos) == "support",
       }
     end
 

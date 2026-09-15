@@ -15,6 +15,8 @@ local function get_state()                           return INTERNALS.getState  
 local function get_stdui()                           return INTERNALS.getStdUi            and INTERNALS.getStdUi()                      end
 local function copy_outcomes(v)                      return INTERNALS.copy_outcomes       and INTERNALS.copy_outcomes(v)       or {}     end
 local function copy_outcome_ranges(v)                return INTERNALS.copy_outcome_ranges and INTERNALS.copy_outcome_ranges(v)  or {}     end
+local function copy_outcome_follow(v)                return INTERNALS.copy_outcome_follow and INTERNALS.copy_outcome_follow(v)  or {}     end
+local function parse_outcome_selector(v)             if INTERNALS.parse_outcome_selector then return INTERNALS.parse_outcome_selector(v) end end
 local function parse_command(v)
   if type(INTERNALS.parse_command) == "function" then
     return INTERNALS.parse_command(v)
@@ -122,7 +124,12 @@ local function build_outcomes_label_updater(modal, outcomesLabel, outcomesConten
     table.sort(exactKeys)
     for i = 1, #exactKeys do
       local idx = exactKeys[i]
-      table.insert(lines, string.format("%d = %s", idx, tostring(modal.outcomes[idx])))
+      local line = string.format("%d = %s", idx, tostring(modal.outcomes[idx]))
+      local follow = modal.outcomeFollow and modal.outcomeFollow[idx]
+      if follow and tostring(follow) ~= "" then
+        line = line .. " -> " .. tostring(follow)
+      end
+      table.insert(lines, line)
     end
 
     local ranges = modal.outcomeRanges or {}
@@ -134,10 +141,17 @@ local function build_outcomes_label_updater(modal, outcomesLabel, outcomesConten
     end)
     for i = 1, #ranges do
       local entry = ranges[i]
-      table.insert(lines, string.format("%d-%d = %s", entry.min, entry.max, entry.text))
+      local line = string.format("%d-%d = %s", entry.min, entry.max, entry.text)
+      if entry.follow and tostring(entry.follow) ~= "" then
+        line = line .. " -> " .. tostring(entry.follow)
+      end
+      table.insert(lines, line)
     end
 
     local text = #lines > 0 and (L_get("modal_issues_title") .. "\n" .. table.concat(lines, "\n")) or L_get("modal_issues_none")
+    if modal.randFollow and tostring(modal.randFollow) ~= "" then
+      text = L_get("modal_followup_rand_line", tostring(modal.randFollow)) .. "\n" .. text
+    end
     outcomesLabel:SetText(text)
     local neededHeight = outcomesLabel:GetStringHeight() + 8
     if neededHeight < 76 then
@@ -145,6 +159,216 @@ local function build_outcomes_label_updater(modal, outcomesLabel, outcomesConten
     end
     outcomesContent:SetHeight(neededHeight)
   end
+end
+
+local function get_profile_rand_names()
+  local names = {}
+  local state = get_state()
+  local chars = state and state.CHARS
+  if type(chars) ~= "table" then
+    return names
+  end
+  for s = 1, #chars do
+    local node = chars[s]
+    if type(node) == "table" then
+      if node.type == "section" then
+        local items = node.items
+        if type(items) == "table" then
+          for i = 1, #items do
+            local item = items[i]
+            if type(item) == "table" and item.type ~= "section" then
+              local nm = tostring(item.name or "")
+              if nm ~= "" then
+                names[#names + 1] = nm
+              end
+            end
+          end
+        end
+      elseif node.type ~= "section" then
+        local nm = tostring(node.name or "")
+        if nm ~= "" then
+          names[#names + 1] = nm
+        end
+      end
+    end
+  end
+  return names
+end
+
+-- Bouton + popup de selection d'un rand de suivi (issue de soutien) parmi les rands du profil.
+-- Le suivi est lie a l'issue dont la valeur est saisie dans le champ Resultat.
+local function create_followup_picker(modal, ebOutcomeValue)
+  local StdUi = get_stdui()
+  if not StdUi then
+    return nil
+  end
+
+  local trigger = StdUi:Button(modal, 96, 20, "")
+  apply_button_theme(trigger)
+
+  local popup = CreateFrame("Frame", nil, modal, "BackdropTemplate")
+  popup:SetFrameStrata("FULLSCREEN_DIALOG")
+  popup:SetFrameLevel((modal:GetFrameLevel() or 1) + 30)
+  popup:EnableMouse(true)
+  popup:SetClampedToScreen(true)
+  apply_panel_theme(popup)
+  popup:Hide()
+
+  local scroll = StdUi:ScrollFrame(popup, 168, 150)
+  StdUi:GlueAcross(scroll, popup, 6, -6, -6, 6)
+  apply_scrollbar_theme(scroll)
+  local content = scroll.scrollChild
+
+  -- Retrouve l'issue existante ciblee par la valeur saisie, pour y attacher le suivi.
+  local function match_existing_issue()
+    if not ebOutcomeValue then
+      return nil
+    end
+    local minVal, maxVal, kind = parse_outcome_selector(ebOutcomeValue:GetText())
+    if not kind then
+      return nil
+    end
+    if kind == "single" then
+      if modal.outcomes and modal.outcomes[minVal] ~= nil then
+        return "single", minVal
+      end
+    else
+      if modal.outcomeRanges then
+        for i = 1, #modal.outcomeRanges do
+          local e = modal.outcomeRanges[i]
+          if e.min == minVal and e.max == maxVal then
+            return "range", i
+          end
+        end
+      end
+    end
+    return nil
+  end
+
+  -- Cible du suivi: une issue precise si la valeur saisie correspond, sinon le rand entier quand Resultat est vide.
+  local function target_issue()
+    local kind, key = match_existing_issue()
+    if kind then
+      return kind, key
+    end
+    local raw = ebOutcomeValue and ebOutcomeValue:GetText() or ""
+    raw = tostring(raw):gsub("%s", "")
+    if raw == "" then
+      return "rand", nil
+    end
+    return nil
+  end
+
+  local function refresh_trigger_text()
+    local sel = modal.pendingFollowRand
+    local shown = (sel and tostring(sel) ~= "") and tostring(sel) or L_get("modal_followup_none")
+    trigger:SetText(L_get("modal_followup_prefix", shown))
+  end
+  modal.resetFollowPicker = refresh_trigger_text
+
+  -- Aligne le suivi affiche sur celui deja enregistre pour la cible (issue saisie ou rand entier).
+  local function sync_from_value()
+    local kind, key = target_issue()
+    if kind == "single" then
+      modal.pendingFollowRand = modal.outcomeFollow and modal.outcomeFollow[key] or nil
+    elseif kind == "range" then
+      modal.pendingFollowRand = modal.outcomeRanges[key].follow
+    elseif kind == "rand" then
+      modal.pendingFollowRand = modal.randFollow
+    else
+      modal.pendingFollowRand = nil
+    end
+    refresh_trigger_text()
+  end
+  modal.syncFollowFromValue = sync_from_value
+
+  local function hide_popup()
+    popup:Hide()
+  end
+  modal.hideFollowPopup = hide_popup
+
+  -- Applique le suivi choisi: a l'issue saisie, sinon au rand entier quand Resultat est vide.
+  local function apply_selection(value)
+    modal.pendingFollowRand = value
+    local kind, key = target_issue()
+    if kind == "single" and key ~= nil then
+      local followMap = modal.outcomeFollow or {}
+      followMap[key] = value
+      modal.outcomeFollow = followMap
+      if modal.updateOutcomesLabel then modal.updateOutcomesLabel() end
+    elseif kind == "range" and key ~= nil then
+      modal.outcomeRanges[key].follow = value
+      if modal.updateOutcomesLabel then modal.updateOutcomesLabel() end
+    elseif kind == "rand" then
+      modal.randFollow = value
+      if modal.updateOutcomesLabel then modal.updateOutcomesLabel() end
+    end
+    refresh_trigger_text()
+  end
+
+  local function rebuild()
+    local kids = { content:GetChildren() }
+    for i = 1, #kids do
+      kids[i]:Hide()
+      kids[i]:SetParent(nil)
+    end
+
+    local options = { { label = L_get("modal_followup_none"), value = nil } }
+    local names = get_profile_rand_names()
+    for i = 1, #names do
+      options[#options + 1] = { label = names[i], value = names[i] }
+    end
+
+    local previous = nil
+    for i = 1, #options do
+      local option = options[i]
+      local row = StdUi:Button(content, 180, 20, option.label)
+      apply_button_theme(row)
+      StdUi:GlueLeft(row, content, 2, 0, 0, 0)
+      StdUi:GlueRight(row, content, -18, 0, 0, 0)
+      if previous then
+        StdUi:GlueBelow(row, previous, 0, -2)
+      else
+        StdUi:GlueTop(row, content, 0, -2)
+      end
+      previous = row
+      row:SetScript("OnClick", function()
+        apply_selection(option.value)
+        hide_popup()
+      end)
+    end
+
+    content:SetHeight(math.max(28, (#options * 22) + 4))
+  end
+
+  trigger:SetScript("OnClick", function()
+    if popup:IsShown() then
+      hide_popup()
+      return
+    end
+    local popupW, popupH = 190, 170
+    popup:ClearAllPoints()
+    popup:SetPoint("TOPRIGHT", trigger, "BOTTOMRIGHT", 0, -2)
+    popup:SetSize(popupW, popupH)
+    if scroll.UpdateSize then
+      scroll:UpdateSize(popupW - 12, popupH - 12)
+    elseif scroll.SetSize then
+      scroll:SetSize(popupW - 12, popupH - 12)
+    end
+    StdUi:GlueAcross(scroll, popup, 6, -6, -6, 6)
+    rebuild()
+    popup:Show()
+  end)
+
+  if ebOutcomeValue and ebOutcomeValue.HookScript then
+    ebOutcomeValue:HookScript("OnTextChanged", sync_from_value)
+  end
+
+  modal:HookScript("OnHide", hide_popup)
+
+  refresh_trigger_text()
+  modal.followTrigger = trigger
+  return trigger
 end
 
 local ICON_BANK_MAX = 1500
@@ -545,6 +769,12 @@ UI.open_new_rand_form = function(onAccept)
     outcomesLabel:SetJustifyH("LEFT")
     outcomesLabel:SetJustifyV("TOP")
 
+    local followTrigger = create_followup_picker(modal, ebOutcomeValue)
+    if followTrigger then
+      followTrigger:SetPoint("LEFT", btnRemoveOutcome, "RIGHT", 8, 0)
+      followTrigger:Hide()
+    end
+
     local btnOk = StdUi:Button(modal, 110, 22, L_get("modal_create"))
     btnOk:SetPoint("BOTTOMLEFT", modal, "BOTTOMLEFT", 70, 14)
     local btnCancel = StdUi:Button(modal, 110, 22, L_get("common_cancel"))
@@ -577,6 +807,16 @@ UI.open_new_rand_form = function(onAccept)
             if btn.SetBackdropBorderColor then
               btn:SetBackdropBorderColor(0.30, 0.85, 0.30, 0.9)
             end
+          end
+        end
+      end
+      if modal.followTrigger then
+        if modal.selectedRandRole == "support" then
+          modal.followTrigger:Show()
+        else
+          modal.followTrigger:Hide()
+          if modal.hideFollowPopup then
+            modal.hideFollowPopup()
           end
         end
       end
@@ -642,6 +882,8 @@ UI.open_new_rand_form = function(onAccept)
           is_default = false,
           outcomes = copy_outcomes(modal.outcomes),
           outcome_ranges = copy_outcome_ranges(modal.outcomeRanges),
+          outcome_follow = copy_outcome_follow(modal.outcomeFollow),
+          follow = modal.randFollow,
         })
       end
     end)
@@ -671,8 +913,14 @@ UI.open_new_rand_form = function(onAccept)
   set_icon_preview(modal.iconPreview, nil)
   modal.outcomes = {}
   modal.outcomeRanges = {}
+  modal.outcomeFollow = {}
+  modal.randFollow = nil
+  modal.pendingFollowRand = nil
   modal.ebOutcomeValue:SetText("")
   modal.ebOutcomeText:SetText("")
+  if modal.resetFollowPicker then
+    modal.resetFollowPicker()
+  end
   modal.updateOutcomesLabel()
   modal.setSelectedRole("offensive")
   modal:Show()
@@ -771,6 +1019,12 @@ UI.open_edit_rand_form = function(randData)
     outcomesLabel:SetJustifyH("LEFT")
     outcomesLabel:SetJustifyV("TOP")
 
+    local followTrigger = create_followup_picker(modal, ebOutcomeValue)
+    if followTrigger then
+      followTrigger:SetPoint("LEFT", btnRemoveOutcome, "RIGHT", 8, 0)
+      followTrigger:Hide()
+    end
+
     local btnOk = StdUi:Button(modal, 110, 22, L_get("common_save"))
     btnOk:SetPoint("BOTTOMLEFT", modal, "BOTTOMLEFT", 70, 14)
     local btnCancel = StdUi:Button(modal, 110, 22, L_get("common_cancel"))
@@ -803,6 +1057,16 @@ UI.open_edit_rand_form = function(randData)
             if btn.SetBackdropBorderColor then
               btn:SetBackdropBorderColor(0.30, 0.85, 0.30, 0.9)
             end
+          end
+        end
+      end
+      if modal.followTrigger then
+        if modal.selectedRandRole == "support" then
+          modal.followTrigger:Show()
+        else
+          modal.followTrigger:Hide()
+          if modal.hideFollowPopup then
+            modal.hideFollowPopup()
           end
         end
       end
@@ -869,6 +1133,8 @@ UI.open_edit_rand_form = function(randData)
       target.icon = modal.selectedIcon
       target.outcomes = copy_outcomes(modal.outcomes)
       target.outcome_ranges = copy_outcome_ranges(modal.outcomeRanges)
+      target.outcome_follow = copy_outcome_follow(modal.outcomeFollow)
+      target.follow = modal.randFollow
 
       modal:Hide()
       UI.REFRESH()
@@ -899,8 +1165,14 @@ UI.open_edit_rand_form = function(randData)
   set_icon_preview(modal.iconPreview, randData.icon)
   modal.outcomes = copy_outcomes(randData.outcomes)
   modal.outcomeRanges = copy_outcome_ranges(randData.outcome_ranges)
+  modal.outcomeFollow = copy_outcome_follow(randData.outcome_follow)
+  modal.randFollow = randData.follow
+  modal.pendingFollowRand = nil
   modal.ebOutcomeValue:SetText("")
   modal.ebOutcomeText:SetText("")
+  if modal.resetFollowPicker then
+    modal.resetFollowPicker()
+  end
   modal.updateOutcomesLabel()
   modal.setSelectedRole(normalize_rand_role(randData.rand_role, randData.name))
   modal:Show()

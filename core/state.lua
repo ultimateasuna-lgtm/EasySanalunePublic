@@ -2,6 +2,7 @@
 ---@field min integer?
 ---@field max integer?
 ---@field text string?
+---@field follow string?
 
 ---@class EasySanaluneRandEntry
 ---@field type string?
@@ -13,6 +14,8 @@
 ---@field icon string|number|nil
 ---@field outcomes table<integer, string>?
 ---@field outcome_ranges EasySanaluneOutcomeRange[]?
+---@field outcome_follow table<integer, string>?
+---@field follow string?
 
 ---@class EasySanaluneSectionEntry
 ---@field type string
@@ -60,6 +63,7 @@
 ---@field mj_enabled boolean
 ---@field resolution_private_print boolean
 ---@field rand_result_reader boolean
+---@field issue_whisper_only boolean
 ---@field profile_mode boolean
 ---@field mj_mobs table<integer, EasySanaluneMJMob>
 ---@field mj_active_mob_id integer|nil
@@ -119,6 +123,7 @@ StateLib.DEF_STATE = {
   mj_enabled = false,
   resolution_private_print = true,
   rand_result_reader = false,
+  issue_whisper_only = false,
   profile_mode = false,
   mj_mobs = {},
   mj_active_mob_id = nil,

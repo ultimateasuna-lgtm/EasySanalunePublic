@@ -34,6 +34,7 @@
 ---@class EasySanaluneCore
 ---@field copy_outcomes fun(outcomes:table|nil):table
 ---@field copy_outcome_ranges fun(ranges:table|nil):EasySanaluneOutcomeRange[]
+---@field copy_outcome_follow fun(follow:table|nil):table<integer, string>
 ---@field parse_outcome_selector fun(input:string):integer?, integer?
 ---@field parse_command fun(input:string):(integer|nil), (integer|nil), (string|nil)
 ---@field normalize_chars fun(chars:EasySanaluneCharEntry[]|nil):EasySanaluneCharEntry[]

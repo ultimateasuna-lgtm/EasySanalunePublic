@@ -17,6 +17,13 @@ local CombatSessionLogic = Core and Core.CombatSession or nil
 ---@class EasySanaluneOutcomeModal
 ---@field outcomes table<integer, string>
 ---@field outcomeRanges EasySanaluneOutcomeRange[]
+---@field outcomeFollow table<integer, string>?
+---@field randFollow string?
+---@field pendingFollowRand string?
+---@field selectedRandRole string?
+---@field followTrigger table?
+---@field resetFollowPicker fun()?
+---@field hideFollowPopup fun()?
 
 ---@type EasySanaluneState
 local STATE = (StateLib and StateLib.DEF_STATE) or {}
@@ -136,7 +143,22 @@ local function fallback_copy_outcome_ranges(value)
         min = tonumber(e.min),
         max = tonumber(e.max),
         text = tostring(e.text or ""),
+        follow = (e.follow ~= nil and e.follow ~= "") and tostring(e.follow) or nil,
       }
+    end
+  end
+  return out
+end
+
+local function fallback_copy_outcome_follow(value)
+  local out = {}
+  if type(value) ~= "table" then
+    return out
+  end
+  for k, v in pairs(value) do
+    local idx = tonumber(k)
+    if idx and v ~= nil and tostring(v) ~= "" then
+      out[idx] = tostring(v)
     end
   end
   return out
@@ -222,6 +244,7 @@ end
 
 local copy_outcomes = type(Core.copy_outcomes) == "function" and Core.copy_outcomes or fallback_copy_outcomes
 local copy_outcome_ranges = type(Core.copy_outcome_ranges) == "function" and Core.copy_outcome_ranges or fallback_copy_outcome_ranges
+local copy_outcome_follow = type(Core.copy_outcome_follow) == "function" and Core.copy_outcome_follow or fallback_copy_outcome_follow
 local parse_outcome_selector = type(Core.parse_outcome_selector) == "function" and Core.parse_outcome_selector or fallback_parse_outcome_selector
 local parse_command = type(Core.parse_command) == "function" and Core.parse_command or fallback_parse_command
 local normalize_chars = type(Core.normalize_chars) == "function" and Core.normalize_chars or fallback_normalize_chars
@@ -464,6 +487,8 @@ INTERNALS.local_display_name = local_display_name
 
 INTERNALS.copy_outcomes = copy_outcomes
 INTERNALS.copy_outcome_ranges = copy_outcome_ranges
+INTERNALS.copy_outcome_follow = copy_outcome_follow
+INTERNALS.parse_outcome_selector = parse_outcome_selector
 INTERNALS.parse_command = parse_command
 ---@return EasySanaluneState
 INTERNALS.get_state = function()
@@ -508,6 +533,7 @@ local INFOS_GUIDE_LINES = {
   "",
   "Cases a cocher du header:",
   "- Message raid: envoie les resultats vers le canal raid selon la logique addon.",
+  "- Chuchotement only: les issues de rand partent en chuchotement vers toi-meme au lieu du canal raid.",
   "- Lire resultat rand: active la lecture/interpretation automatique de tes rands.",
   "- MJ: active les fonctions MJ (bouton Fenetre MJ, comportement associe).",
   "- Resolution privee: force les resolutions en mode prive si necessaire.",
@@ -540,6 +566,13 @@ local INFOS_GUIDE_LINES = {
   "Important:",
   "- Le survol sert a garder une interface propre: les boutons apparaissent quand utiles.",
   "- Sur un rand, le texte d'info et la valeur sont recalcules selon ton contexte (buffs/debuffs).",
+  "",
+  "Rand de suivi (soutien uniquement):",
+  "- Dans l'edition d'un rand de type Soutien, tu peux enchainer un autre rand automatiquement.",
+  "- Resultat vide + bouton Suivi: le suivi s'applique au rand entier (lance apres n'importe quel resultat).",
+  "- Pour cibler une issue precise: saisis sa valeur dans Resultat puis choisis le rand via Suivi.",
+  "- Le bouton Suivi et la ligne Suivi du rand refletent ce qui est enregistre.",
+  "- Au tirage du rand soutien, le suivi part tout seul (meme si Lire resultat rand est desactive).",
   "",
   "==============================",
   "4) Fenetre Buffs / Debuffs",
@@ -1540,6 +1573,7 @@ end
 local function add_outcome_to_modal(modal, ebOutcomeValue, ebOutcomeText, update_outcomes_label)
   modal.outcomes = modal.outcomes or {}
   modal.outcomeRanges = modal.outcomeRanges or {}
+  modal.outcomeFollow = modal.outcomeFollow or {}
   local minVal, maxVal, kind = parse_outcome_selector(ebOutcomeValue:GetText())
   if not kind then
     L_print("outcome_invalid")
@@ -1553,29 +1587,46 @@ local function add_outcome_to_modal(modal, ebOutcomeValue, ebOutcomeText, update
     return
   end
 
+  -- Le rand de suivi n'a de sens que pour un rand de type soutien.
+  local followName = nil
+  if modal.selectedRandRole == "support" then
+    local raw = tostring(modal.pendingFollowRand or "")
+    raw = string.gsub(raw, "^%s+", "")
+    raw = string.gsub(raw, "%s+$", "")
+    if raw ~= "" then
+      followName = raw
+    end
+  end
+
   if kind == "single" then
     local outcomeKey = minVal
     if outcomeKey == nil then
       return
     end
     modal.outcomes[outcomeKey] = text
+    modal.outcomeFollow[outcomeKey] = followName
   else
     local replaced = false
     for i = 1, #modal.outcomeRanges do
       local entry = modal.outcomeRanges[i]
       if entry.min == minVal and entry.max == maxVal then
         entry.text = text
+        entry.follow = followName
         replaced = true
         break
       end
     end
     if not replaced then
-      table.insert(modal.outcomeRanges, { min = minVal, max = maxVal, text = text })
+      table.insert(modal.outcomeRanges, { min = minVal, max = maxVal, text = text, follow = followName })
     end
   end
 
   ebOutcomeValue:SetText("")
   ebOutcomeText:SetText("")
+  modal.pendingFollowRand = nil
+  if modal.resetFollowPicker then
+    modal.resetFollowPicker()
+  end
   update_outcomes_label()
 end
 INTERNALS.add_outcome_to_modal = add_outcome_to_modal
@@ -1600,6 +1651,9 @@ local function remove_outcome_from_modal(modal, ebOutcomeValue, ebOutcomeText, u
       return
     end
     modal.outcomes[outcomeKey] = nil
+    if modal.outcomeFollow then
+      modal.outcomeFollow[outcomeKey] = nil
+    end
   else
     local removed = false
     for i = #modal.outcomeRanges, 1, -1 do
@@ -1663,6 +1717,76 @@ local function is_local_player_roll(roller)
   return shortName == UnitName("player")
 end
 
+local function find_rand_entry_by_name(name)
+  local target = tostring(name or "")
+  target = string.gsub(target, "^%s+", "")
+  target = string.gsub(target, "%s+$", "")
+  if target == "" then
+    return nil
+  end
+  local chars = STATE and STATE.CHARS
+  if type(chars) ~= "table" then
+    return nil
+  end
+  for s = 1, #chars do
+    local node = chars[s]
+    if type(node) == "table" then
+      if node.type == "section" then
+        local items = node.items
+        if type(items) == "table" then
+          for i = 1, #items do
+            local item = items[i]
+            if type(item) == "table" and item.type ~= "section" and tostring(item.name or "") == target then
+              return item
+            end
+          end
+        end
+      elseif node.type ~= "section" and tostring(node.name or "") == target then
+        return node
+      end
+    end
+  end
+  return nil
+end
+
+local FOLLOWUP_MAX_CHAIN = 8
+
+-- Lance automatiquement un rand de suivi (issue de soutien) via un pendingRand dedie.
+function UI.LaunchFollowupRand(randName, chainDepth)
+  local depth = tonumber(chainDepth) or 1
+  if depth > FOLLOWUP_MAX_CHAIN then
+    return
+  end
+  local entry = find_rand_entry_by_name(randName)
+  if not entry then
+    return
+  end
+  local minVal, maxVal = parse_command(entry.command)
+  if not minVal or not maxVal then
+    minVal, maxVal = parse_command(entry.info)
+  end
+  if not minVal or not maxVal then
+    return
+  end
+  if UI.Buffs and UI.Buffs.ApplyBonusToRange then
+    minVal, maxVal = UI.Buffs.ApplyBonusToRange(entry.name, minVal, maxVal, entry.rand_role)
+  end
+  local role = string.lower(tostring(entry.rand_role or ""))
+  UI.pendingRand = {
+    time = GetTime(),
+    min = minVal,
+    max = maxVal,
+    outcomes = copy_outcomes(entry.outcomes),
+    outcomeRanges = copy_outcome_ranges(entry.outcome_ranges),
+    outcomeFollow = copy_outcome_follow(entry.outcome_follow),
+    randFollow = entry.follow,
+    isSupport = (role == "support" or role == "soutien" or role == "sout"),
+    chainDepth = depth,
+  }
+  ---@diagnostic disable-next-line:deprecated
+  RandomRoll(minVal, maxVal)
+end
+
 local function setup_rand_listener()
   if randListenerFrame then
     return
@@ -1671,7 +1795,7 @@ local function setup_rand_listener()
   randListenerFrame = CreateFrame("Frame")
   randListenerFrame:RegisterEvent("CHAT_MSG_SYSTEM")
   randListenerFrame:SetScript("OnEvent", function(_, _, message)
-    if not STATE or not STATE.rand_result_reader then
+    if not STATE then
       return
     end
 
@@ -1695,21 +1819,36 @@ local function setup_rand_listener()
     end
 
     local outcomes = pending.outcomes
+    local followMap = pending.outcomeFollow
     local text = outcomes and outcomes[roll]
-    if not text or text == "" then
+    local followName = nil
+    if text and text ~= "" then
+      followName = followMap and followMap[roll]
+    else
+      text = nil
       local ranges = pending.outcomeRanges
       if type(ranges) == "table" then
         for i = 1, #ranges do
           local entry = ranges[i]
           if entry and roll >= entry.min and roll <= entry.max then
             text = entry.text
+            followName = entry.follow
             break
           end
         end
       end
     end
-    if text and text ~= "" then
-      if IsInRaid() then
+    -- Suivi de repli au niveau du rand si l'issue n'en definit pas.
+    if not (followName and tostring(followName) ~= "") then
+      followName = pending.randFollow
+    end
+
+    -- Affichage de l'issue reserve a la lecture des rands active.
+    if text and text ~= "" and STATE.rand_result_reader then
+      if STATE.issue_whisper_only then
+        -- Issue affichee en message addon local (un seul message), jamais diffusee au raid.
+        L_print("rand_reader_text", text)
+      elseif IsInRaid() then
         ---@diagnostic disable-next-line:deprecated
         SendChatMessage(escape_chat_message(text), "RAID")
       else
@@ -1717,7 +1856,14 @@ local function setup_rand_listener()
       end
     end
 
+    local pendingIsSupport = pending.isSupport and true or false
+    local pendingChainDepth = tonumber(pending.chainDepth) or 0
     UI.pendingRand = nil
+
+    -- Le rand de suivi part meme si la lecture des rands est desactivee.
+    if pendingIsSupport and followName and tostring(followName) ~= "" and UI.LaunchFollowupRand then
+      UI.LaunchFollowupRand(followName, pendingChainDepth + 1)
+    end
   end)
 end
   -- -----------------------------------------------------------------------------
@@ -2093,6 +2239,9 @@ UI.init_ui = function(state)
   if STATE.rand_result_reader == nil then
     STATE.rand_result_reader = false
   end
+  if STATE.issue_whisper_only == nil then
+    STATE.issue_whisper_only = false
+  end
   setup_rand_listener()
   if UI.EnsurePlayerSurvivalTooltipHook then
     UI.EnsurePlayerSurvivalTooltipHook()
@@ -2253,7 +2402,7 @@ local function get_min_frame_size()
     minWidth = 380
   end
   local bodyChromeHeight = 45
-  local headerAndOffsets = 92   -- hauteur du bandeau (88) + marges techniques
+  local headerAndOffsets = 113  -- hauteur du bandeau (109) + marges techniques
   local profileAndOffsets = 48
   local minScrollHeight = 40 + EXTRA_MAINFRAME_HEIGHT
 
@@ -2521,7 +2670,7 @@ UI.build_body = function()
   UI.bodyBorderOverlay = bodyBorderOverlay
 
   -- Bandeau principal
-  UI.header = StdUi:Panel(UI.BODY, 10, 88)
+  UI.header = StdUi:Panel(UI.BODY, 10, 109)
   StdUi:GlueTop(UI.header, UI.BODY, 0, -5, "TOP")
   StdUi:GlueLeft(UI.header, UI.BODY, 5, 0)
   StdUi:GlueRight(UI.header, UI.BODY, -5, 0)
@@ -2544,8 +2693,17 @@ UI.build_body = function()
     _G.EASY_SANALUNE_SAVED_STATE = STATE
   end
 
+  UI.issueWhisperToggle = StdUi:Checkbox(UI.header, L_get("ui_toggle_issue_whisper"))
+  UI.issueWhisperToggle:SetPoint("TOPLEFT", UI.raidToggle, "BOTTOMLEFT", 0, -1)
+  apply_checkbox_theme(UI.issueWhisperToggle)
+  UI.issueWhisperToggle:SetChecked(STATE.issue_whisper_only and true or false)
+  UI.issueWhisperToggle.OnValueChanged = function(self, checked)
+    STATE.issue_whisper_only = checked and true or false
+    _G.EASY_SANALUNE_SAVED_STATE = STATE
+  end
+
   UI.randReaderToggle = StdUi:Checkbox(UI.header, L_get("ui_toggle_rand_reader"))
-  UI.randReaderToggle:SetPoint("TOPLEFT", UI.raidToggle, "BOTTOMLEFT", 0, -1)
+  UI.randReaderToggle:SetPoint("TOPLEFT", UI.issueWhisperToggle, "BOTTOMLEFT", 0, -1)
   apply_checkbox_theme(UI.randReaderToggle)
   UI.randReaderToggle:SetChecked(STATE.rand_result_reader and true or false)
   UI.randReaderToggle.OnValueChanged = function(self, checked)
